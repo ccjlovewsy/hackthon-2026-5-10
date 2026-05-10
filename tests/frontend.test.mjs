@@ -392,6 +392,11 @@ test("frontend helper APIs expose parsed textbooks, graph, RAG status, report, a
       assert.equal(uploadJson.ok, true);
       assert.equal(uploadJson.textbook.filename, "浏览器上传.md");
       assert.ok(uploadJson.textbook.chapters.length >= 1);
+      assert.ok(uploadJson.textbook.total_chars > 0);
+      assert.match(
+        uploadJson.textbook.chapters.map((chapter) => chapter.content).join("\n"),
+        /浏览器上传教材需要被解析/
+      );
       await fs.access(path.join(dataDir, "preParseTextbook2JSON-浏览器上传.json"));
     } finally {
       await closeServer(server);

@@ -46,6 +46,7 @@ origin-textbooks/
 .turbo/
 .vercel/
 .tsbuildinfo
+tmp/frontend-upload-*.md
 
 # --- 测试结果 ---
 coverage/

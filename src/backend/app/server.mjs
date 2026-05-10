@@ -20,7 +20,6 @@ export function createApp(options = {}) {
   app.get("/api/health", (_req, res) => {
     res.json({ ok: true });
   });
-  app.use("/api/frontend/uploadTextbookBinary", express.raw({ type: "*/*", limit: "200mb" }));
   app.use(express.json({ limit: "25mb" }));
   app.use("/api/frontend", createFrontendRouter({ dataDir }));
   app.use("/api/llm", createLLMRouter({ registry: defaultLLMRegistry }));

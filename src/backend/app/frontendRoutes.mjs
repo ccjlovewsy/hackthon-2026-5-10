@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import { createWriteStream } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import express from "express";
 import { preParseTextbook2JSON } from "../domain/preParseTextbook2JSON/index.mjs";
@@ -9,6 +10,7 @@ import { buildDedupCompressionStats } from "../domain/NodesDeduplicationAndAlign
 
 const DEFAULT_DATA_DIR = path.resolve("data");
 const TMP_DIR = path.resolve("tmp");
+const MAX_UPLOAD_BYTES = 200 * 1024 * 1024;
 
 function safeBasename(value, fallback = "textbook") {
   const basename = path.basename(String(value ?? "").trim() || fallback);
@@ -107,6 +109,9 @@ async function parseAndPersistUploadedTextbook({
   let sourcePath = uploadPath;
 
   if (!sourcePath) {
+    if (!Buffer.isBuffer(buffer) || buffer.length === 0) {
+      throw new TypeError("Uploaded textbook is empty.");
+    }
     const digest = crypto
       .createHash("sha1")
       .update(originalFilename)
@@ -144,6 +149,20 @@ async function parseAndPersistUploadedTextbook({
   };
 }
 
+function createUploadLimitStream(maxBytes = MAX_UPLOAD_BYTES) {
+  let totalBytes = 0;
+  return new Transform({
+    transform(chunk, _encoding, callback) {
+      totalBytes += chunk.length;
+      if (totalBytes > maxBytes) {
+        callback(new RangeError(`Uploaded textbook exceeds ${Math.round(maxBytes / 1024 / 1024)} MB limit.`));
+        return;
+      }
+      callback(null, chunk);
+    }
+  });
+}
+
 async function persistIncomingTextbookStream(req, originalFilename, format) {
   const ext = path.extname(originalFilename) || (format ? `.${String(format).replace(/^\./, "")}` : ".txt");
   const digest = crypto
@@ -156,7 +175,23 @@ async function persistIncomingTextbookStream(req, originalFilename, format) {
   const uploadPath = path.join(TMP_DIR, `frontend-upload-${digest}${ext}`);
 
   await fs.mkdir(TMP_DIR, { recursive: true });
-  await pipeline(req, createWriteStream(uploadPath));
+  try {
+    if (Buffer.isBuffer(req.body)) {
+      if (req.body.length > MAX_UPLOAD_BYTES) {
+        throw new RangeError(`Uploaded textbook exceeds ${Math.round(MAX_UPLOAD_BYTES / 1024 / 1024)} MB limit.`);
+      }
+      await fs.writeFile(uploadPath, req.body);
+    } else {
+      await pipeline(req, createUploadLimitStream(), createWriteStream(uploadPath));
+    }
+    const stat = await fs.stat(uploadPath);
+    if (stat.size === 0) {
+      throw new TypeError("Uploaded textbook is empty.");
+    }
+  } catch (error) {
+    await fs.rm(uploadPath, { force: true });
+    throw error;
+  }
   return uploadPath;
 }
 
