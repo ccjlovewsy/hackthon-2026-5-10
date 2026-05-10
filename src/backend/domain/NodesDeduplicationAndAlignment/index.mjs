@@ -558,12 +558,13 @@ function knowledgeNodes(nodes) {
   return filtered.length ? filtered : nodes;
 }
 
-function compressionBaseStats({ rawNodes, currentNodes, parsedTextbooks = [] }) {
+export function buildDedupCompressionStats({ rawNodes, currentNodes, parsedTextbooks = [] }) {
   const parsedOriginalChars = parsedTextbooks.reduce((sum, textbook) => sum + Number(textbook.total_chars ?? 0), 0);
   const fallbackOriginalChars = rawNodes.reduce((sum, node) => sum + fallbackRawContentChars(node), 0);
   const originalChars = parsedOriginalChars > 0 ? parsedOriginalChars : fallbackOriginalChars;
-  const integratedChars = currentNodes.reduce((sum, node) => sum + countIntegratedContentChars(node), 0);
-  const ratio = integratedChars / Math.max(1, originalChars);
+  const hasCurrentNodes = Array.isArray(currentNodes);
+  const integratedChars = hasCurrentNodes ? currentNodes.reduce((sum, node) => sum + countIntegratedContentChars(node), 0) : null;
+  const ratio = hasCurrentNodes ? integratedChars / Math.max(1, originalChars) : null;
   const source = parsedOriginalChars > 0 ? "parsed_textbook_total_chars" : "node_content_fallback";
 
   return {
@@ -573,7 +574,7 @@ function compressionBaseStats({ rawNodes, currentNodes, parsedTextbooks = [] }) 
     source,
     source_detail: {
       original_chars_source: source,
-      integrated_chars_source: "current_graph_node_definitions",
+      integrated_chars_source: hasCurrentNodes ? "current_graph_node_definitions" : "unavailable",
       textbook_count: parsedTextbooks.length,
       textbook_files: parsedTextbooks.map((textbook) => textbook.file).filter(Boolean)
     }
@@ -950,7 +951,7 @@ function defaultReason({ action, affectedNodes, userPrompt }) {
 }
 
 function graphStats({ rawNodes, currentNodes, relationships, decisions, parsedTextbooks = [] }) {
-  const compressionStats = compressionBaseStats({ rawNodes, currentNodes, parsedTextbooks });
+  const compressionStats = buildDedupCompressionStats({ rawNodes, currentNodes, parsedTextbooks });
   const { originalChars, integratedChars, ratio } = compressionStats;
   const actionCounts = Object.fromEntries(DEDUP_ACTIONS.map((action) => [action, decisions.filter((decision) => decision.action === action).length]));
   const factualRelationships = relationships.filter((relationship) => !relationship.derived && relationship.fact_eligible !== false);

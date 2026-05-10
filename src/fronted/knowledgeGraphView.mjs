@@ -7,6 +7,10 @@ export function createKnowledgeGraphView({
   onNodeSelect = () => {}
 }) {
   let cy = null;
+  let renderedSignature = "";
+  let hoverFrame = 0;
+  let pendingFocus = null;
+  let lastSearchQuery = "";
 
   function graphStyle() {
     return [
@@ -89,6 +93,7 @@ export function createKnowledgeGraphView({
           "text-background-color": "#fffaf2",
           "text-background-opacity": 0.92,
           "text-background-padding": 3,
+          "text-margin-y": 10,
           "text-rotation": "autorotate"
         }
       },
@@ -121,20 +126,34 @@ export function createKnowledgeGraphView({
   function focusNeighborhood(node) {
     if (!cy) return;
     const neighborhood = node.closedNeighborhood();
-    cy.elements().addClass("dimmed");
-    neighborhood.removeClass("dimmed");
-    node.addClass("focused");
-    node.connectedEdges().addClass("focused");
+    cy.batch(() => {
+      cy.elements().addClass("dimmed");
+      neighborhood.removeClass("dimmed");
+      node.addClass("focused");
+      node.connectedEdges().addClass("focused");
+    });
   }
 
   function clearFocus() {
     if (!cy) return;
-    cy.elements().removeClass("dimmed focused");
+    pendingFocus = null;
+    window.cancelAnimationFrame(hoverFrame);
+    hoverFrame = 0;
+    cy.batch(() => cy.elements().removeClass("dimmed focused"));
+  }
+
+  function scheduleFocus(node) {
+    pendingFocus = node;
+    if (hoverFrame) return;
+    hoverFrame = window.requestAnimationFrame(() => {
+      hoverFrame = 0;
+      if (pendingFocus) focusNeighborhood(pendingFocus);
+    });
   }
 
   function bindEvents() {
     cy.on("tap", "node", (event) => onNodeSelect(event.target.data("raw")));
-    cy.on("mouseover", "node", (event) => focusNeighborhood(event.target));
+    cy.on("mouseover", "node", (event) => scheduleFocus(event.target));
     cy.on("mouseout", "node", clearFocus);
     cy.on("mouseover", "edge", (event) => event.target.addClass("focused"));
     cy.on("mouseout", "edge", (event) => event.target.removeClass("focused"));
@@ -144,6 +163,12 @@ export function createKnowledgeGraphView({
     const { elements } = graphVisualData(graph);
     const hasGraph = elements.some((element) => element.group === "nodes");
     emptyState?.classList.toggle("visible", !hasGraph);
+    const signature = JSON.stringify({
+      nodes: elements.filter((element) => element.group === "nodes").map((element) => [element.data.id, element.position]),
+      edges: elements.filter((element) => element.group === "edges").map((element) => [element.data.id, element.data.source, element.data.target])
+    });
+    if (cy && signature === renderedSignature) return;
+    renderedSignature = signature;
 
     if (!cy) {
       cy = cytoscape({
@@ -164,9 +189,11 @@ export function createKnowledgeGraphView({
       return;
     }
 
-    cy.elements().remove();
-    cy.add(elements);
-    cy.style(graphStyle());
+    cy.batch(() => {
+      cy.elements().remove();
+      cy.add(elements);
+      cy.style(graphStyle());
+    });
     cy.layout({ name: "preset", animate: false, fit: true, padding: 86 }).run();
   }
 
@@ -177,6 +204,8 @@ export function createKnowledgeGraphView({
   function search(queryText) {
     if (!cy) return;
     const query = String(queryText ?? "").trim().toLocaleLowerCase("zh-CN");
+    if (query === lastSearchQuery) return;
+    lastSearchQuery = query;
     cy.nodes().removeClass("highlight");
     if (!query) return;
     const matches = cy.nodes().filter((node) => {
@@ -187,7 +216,7 @@ export function createKnowledgeGraphView({
         .includes(query);
     });
     matches.addClass("highlight");
-    if (matches.length > 0) cy.fit(matches, 80);
+    if (matches.length > 0 && query.length >= 2) cy.animate({ fit: { eles: matches, padding: 80 }, duration: 120 });
   }
 
   return {

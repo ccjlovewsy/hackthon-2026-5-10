@@ -107,18 +107,40 @@ async function startServer(dataDir) {
           warnings.push(args.join(' '));
           originalWarn.apply(win.console, args);
         };
+        const canvasStats = (canvas) => {
+          if (!canvas || canvas.width <= 0 || canvas.height <= 0) return null;
+          const context = canvas.getContext('2d', { willReadFrequently: true });
+          if (!context) return { width: canvas.width, height: canvas.height, painted: 0, colored: 0, colorBuckets: 0 };
+          const sampleX = 28;
+          const sampleY = 18;
+          let painted = 0;
+          let colored = 0;
+          const buckets = new Set();
+          for (let yIndex = 0; yIndex < sampleY; yIndex += 1) {
+            for (let xIndex = 0; xIndex < sampleX; xIndex += 1) {
+              const x = Math.max(0, Math.min(canvas.width - 1, Math.floor((canvas.width - 1) * xIndex / Math.max(1, sampleX - 1))));
+              const y = Math.max(0, Math.min(canvas.height - 1, Math.floor((canvas.height - 1) * yIndex / Math.max(1, sampleY - 1))));
+              const [r, g, b, a] = context.getImageData(x, y, 1, 1).data;
+              if (a > 0) painted += 1;
+              if (a > 0 && !(r > 246 && g > 246 && b > 246)) colored += 1;
+              if (a > 0) buckets.add([r >> 4, g >> 4, b >> 4, a >> 4].join(','));
+            }
+          }
+          return { width: canvas.width, height: canvas.height, painted, colored, colorBuckets: buckets.size };
+        };
         await sleep(1600);
         const result = { warnings };
         for (const view of ['graph', 'matrix', 'sankey', 'timeline']) {
           doc.querySelector('[data-view="' + view + '"]')?.click();
           await sleep(1100);
-          const graphCanvas = doc.querySelector('#cy canvas');
-          const insightCanvas = doc.querySelector('#insightChart canvas');
+          const graphCanvases = [...doc.querySelectorAll('#cy canvas')].map(canvasStats).filter(Boolean);
+          const insightCanvases = [...doc.querySelectorAll('#insightChart canvas')].map(canvasStats).filter(Boolean);
           result[view] = {
             cyActive: doc.querySelector('#cy')?.classList.contains('active') ?? false,
             insightActive: doc.querySelector('#insightChart')?.classList.contains('active') ?? false,
-            graphCanvas: graphCanvas ? { width: graphCanvas.width, height: graphCanvas.height } : null,
-            insightCanvas: insightCanvas ? { width: insightCanvas.width, height: insightCanvas.height } : null,
+            graphCanvases,
+            insightCanvases,
+            legendText: doc.querySelector('#graphLegend')?.textContent?.replace(/\\s+/g, ' ').trim() ?? '',
             insightText: doc.querySelector('#insightChart')?.textContent?.slice(0, 120) ?? ''
           };
         }
@@ -185,12 +207,16 @@ try {
   if (invalidWarnings.length > 0) {
     throw new Error(`Invalid Cytoscape style warnings: ${invalidWarnings.join("; ")}`);
   }
-  if (!result.graph.graphCanvas || result.graph.graphCanvas.width <= 0 || result.graph.graphCanvas.height <= 0) {
+  const graphPainted = result.graph.graphCanvases.some((canvas) => canvas.width > 0 && canvas.height > 0 && canvas.colorBuckets >= 2);
+  if (!graphPainted) {
     throw new Error(`Graph canvas did not render: ${JSON.stringify(result.graph)}`);
   }
+  if (!/教材.*浏览器测试教材.*关系.*applies_to/u.test(result.graph.legendText)) {
+    throw new Error(`Graph legend did not expose source and relation mappings: ${result.graph.legendText}`);
+  }
   for (const view of ["matrix", "sankey", "timeline"]) {
-    const canvas = result[view].insightCanvas;
-    if (!canvas || canvas.width <= 0 || canvas.height <= 0) {
+    const painted = result[view].insightCanvases.some((canvas) => canvas.width > 0 && canvas.height > 0 && canvas.colorBuckets >= 2);
+    if (!painted) {
       throw new Error(`${view} canvas did not render: ${JSON.stringify(result[view])}`);
     }
   }

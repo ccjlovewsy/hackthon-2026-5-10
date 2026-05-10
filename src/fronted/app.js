@@ -1,6 +1,7 @@
 import { shouldStopDedupe } from "./dedupePolicy.mjs";
 import { createGraphInsightsView, filterGraphByRelation, relationTypes } from "./graphInsightsView.mjs";
 import { createKnowledgeGraphView } from "./knowledgeGraphView.mjs";
+import { relationColor, relationLabel, sourceColor } from "./graphLayout.mjs";
 
 const state = {
   llmId: localStorage.getItem("textbook-agent-llm-id") || "",
@@ -11,11 +12,22 @@ const state = {
   insightsView: null,
   activeGraphView: "graph",
   relationFilter: "all",
-  selectedNode: null
+  selectedNode: null,
+  selectedTextbookId: "",
+  graphRenderKey: "",
+  legendKey: ""
 };
 
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];
+
+function debounce(fn, wait = 120) {
+  let timer = 0;
+  return (...args) => {
+    window.clearTimeout(timer);
+    timer = window.setTimeout(() => fn(...args), wait);
+  };
+}
 
 function toast(message, kind = "ok") {
   const el = $("#toast");
@@ -113,7 +125,10 @@ function renderTextbooks() {
           <strong>${escapeHtml(book.title || book.filename)}</strong>
           <div class="meta-line">${escapeHtml(book.filename)} · ${book.chapter_count} 章 · ${book.total_pages} 页</div>
           <div class="meta-line">${book.total_chars} 字 · ${escapeHtml(book.textbook_id)}</div>
-          <button class="ghost-button load-book" data-id="${escapeHtml(book.textbook_id)}">查看章节</button>
+          <div class="file-actions">
+            <button class="ghost-button load-book" data-id="${escapeHtml(book.textbook_id)}">章节</button>
+            <button class="secondary-button build-graph" data-id="${escapeHtml(book.textbook_id)}">抽取图谱</button>
+          </div>
         </article>
       `
     )
@@ -121,6 +136,8 @@ function renderTextbooks() {
 
   $$(".load-book").forEach((button) => {
     button.addEventListener("click", async () => {
+      state.selectedTextbookId = button.dataset.id;
+      markSelectedTextbook();
       const result = await api(`/api/frontend/textbooks/${encodeURIComponent(button.dataset.id)}`);
       const preview = result.textbook.chapters
         .slice(0, 6)
@@ -129,12 +146,65 @@ function renderTextbooks() {
       toast(preview || "未找到章节");
     });
   });
+  $$(".build-graph").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.selectedTextbookId = button.dataset.id;
+      markSelectedTextbook();
+      buildKnowledgeGraph(button.dataset.id).catch((error) => toast(error.message, "bad"));
+    });
+  });
+  markSelectedTextbook();
+}
+
+function markSelectedTextbook() {
+  $$(".file-item").forEach((item) => {
+    const button = item.querySelector("[data-id]");
+    item.classList.toggle("selected", Boolean(button?.dataset.id && button.dataset.id === state.selectedTextbookId));
+  });
 }
 
 async function refreshTextbooks() {
   const result = await api("/api/frontend/textbooks");
   state.textbooks = result.textbooks ?? [];
   renderTextbooks();
+}
+
+async function buildKnowledgeGraph(textbookId) {
+  if (!requireLLM()) return;
+  const id = textbookId || state.selectedTextbookId || state.textbooks[0]?.textbook_id;
+  if (!id) {
+    toast("请先上传或选择一本教材", "bad");
+    return;
+  }
+  const button = [...$$(".build-graph")].find((item) => item.dataset.id === id);
+  const originalText = button?.textContent;
+  if (button) {
+    button.disabled = true;
+    button.textContent = "抽取中";
+  }
+  try {
+    const { textbook } = await api(`/api/frontend/textbooks/${encodeURIComponent(id)}`);
+    const graph = await api("/api/parseEntityInTextbookJSON2VisualNode/parseEntityInTextbookJSON2VisualNode", {
+      method: "POST",
+      body: JSON.stringify({
+        llmId: state.llmId,
+        textbookJSON: textbook,
+        maxNodesPerChapter: 12,
+        maxChapterChars: 9000
+      })
+    });
+    await api("/api/parseEntityInTextbookJSON2VisualNode/exportVisualNodeGraph2DataJSON", {
+      method: "POST",
+      body: JSON.stringify({})
+    });
+    await refreshGraph("source");
+    toast(`图谱抽取完成：${graph.stats?.node_count ?? graph.nodes?.length ?? 0} 个节点`);
+  } finally {
+    if (button) {
+      button.disabled = false;
+      button.textContent = originalText;
+    }
+  }
 }
 
 function fileStatusItem(file, status, detail = "") {
@@ -159,7 +229,7 @@ async function uploadFiles(files) {
         {
           method: "POST",
           headers: { "content-type": file.type || "application/octet-stream" },
-          body: await file.arrayBuffer()
+          body: file
         }
       );
       item.replaceWith(fileStatusItem(file, "已完成", `${result.textbook.title} · ${result.textbook.chapters.length} 章`));
@@ -209,39 +279,119 @@ function showNodeDetail(node) {
 }
 
 function renderGraph(graph) {
+  $("#cy").classList.add("is-updating");
+  $("#insightChart").classList.add("is-updating");
   const filteredGraph = filterGraphByRelation(graph, state.relationFilter);
   const edgeCount = graph.stats?.relationship_count ?? graph.stats?.factual_relationship_count ?? graph.relationships?.filter?.((edge) => !edge.derived && edge.fact_eligible !== false).length ?? graph.relationships?.length ?? 0;
+  const filteredEdgeCount = (filteredGraph.relationships ?? []).filter((edge) => !edge.derived && edge.fact_eligible !== false).length;
   $("#nodeCount").textContent = graph.stats?.node_count ?? graph.nodes?.length ?? 0;
-  $("#edgeCount").textContent = state.relationFilter === "all" ? edgeCount : filteredGraph.relationships?.length ?? 0;
+  $("#edgeCount").textContent = state.relationFilter === "all" ? edgeCount : filteredEdgeCount;
   $("#bookCount").textContent = graph.stats?.textbook_count ?? 0;
   $("#relationCount").textContent = graph.stats?.relation_types?.length ?? 0;
   $("#graphTitle").textContent = graph.scope === "integrated" ? "整合后知识图谱" : "源知识图谱";
   renderRelationFilter(graph);
+  renderGraphLegend(graph);
   updateGraphViewMode();
 
-  if (!window.cytoscape) return;
-  if (!state.graphView) {
-    state.graphView = createKnowledgeGraphView({
-      container: $("#cy"),
-      emptyState: $("#graphEmpty"),
-      cytoscape: window.cytoscape,
-      onNodeSelect: showNodeDetail
-    });
+  if (state.activeGraphView === "graph") {
+    if (!window.cytoscape) return;
+    if (!state.graphView) {
+      state.graphView = createKnowledgeGraphView({
+        container: $("#cy"),
+        emptyState: $("#graphEmpty"),
+        cytoscape: window.cytoscape,
+        onNodeSelect: showNodeDetail
+      });
+    }
+    state.graphView.render(filteredGraph);
   }
-  state.graphView.render(filteredGraph);
   renderInsights();
+  window.setTimeout(() => {
+    $("#cy").classList.remove("is-updating");
+    $("#insightChart").classList.remove("is-updating");
+  }, 160);
 }
 
 function renderRelationFilter(graph) {
   const select = $("#relationFilter");
   const current = state.relationFilter;
   const types = relationTypes(graph);
+  const key = types.join("|");
+  if (select.dataset.key === key) {
+    select.value = current === "all" || types.includes(current) ? current : "all";
+    return;
+  }
+  select.dataset.key = key;
   select.innerHTML = [
     `<option value="all">全部关系</option>`,
-    ...types.map((type) => `<option value="${escapeHtml(type)}">${escapeHtml(type)}</option>`)
+    ...types.map(
+      (type) => `<option value="${escapeHtml(type)}">${escapeHtml(relationLabel(type))}</option>`
+    )
   ].join("");
   state.relationFilter = current === "all" || types.includes(current) ? current : "all";
   select.value = state.relationFilter;
+}
+
+function graphSourceRows(graph) {
+  const rows = new Map();
+  for (const node of graph.nodes ?? []) {
+    const id = node.textbook_id ?? node.metadata?.textbook_id ?? "unknown";
+    if (!rows.has(id)) {
+      rows.set(id, {
+        id,
+        label: node.textbook_title ?? node.title ?? node.filename ?? id
+      });
+    }
+  }
+  return [...rows.values()];
+}
+
+function renderGraphLegend(graph) {
+  const sourceRows = graphSourceRows(graph).slice(0, 7);
+  const relations = relationTypes(graph).slice(0, 6);
+  const categoryCount = new Set((graph.nodes ?? []).map((node) => node.category).filter(Boolean)).size;
+  const hasFrequency = (graph.nodes ?? []).some((node) => Number(node.frequency ?? node.sources?.length ?? 1) > 1);
+  const key = JSON.stringify({ sources: sourceRows, relations, categoryCount, hasFrequency });
+  if (key === state.legendKey) return;
+  state.legendKey = key;
+
+  $("#graphLegend").innerHTML = `
+    <div class="legend-block">
+      <span class="legend-title">教材</span>
+      ${
+        sourceRows
+          .map(
+            (row, index) => `
+              <span class="legend-chip">
+                <i style="--chip-color:${sourceColor(row.id, index)}"></i>
+                ${escapeHtml(row.label)}
+              </span>
+            `
+          )
+          .join("") || `<span class="legend-chip muted-chip">暂无来源</span>`
+      }
+    </div>
+    <div class="legend-block">
+      <span class="legend-title">关系</span>
+      ${
+        relations
+          .map(
+            (type) => `
+              <span class="legend-chip">
+                <i style="--chip-color:${relationColor(type)}"></i>
+                ${escapeHtml(relationLabel(type))}
+              </span>
+            `
+          )
+          .join("") || `<span class="legend-chip muted-chip">暂无关系</span>`
+      }
+    </div>
+    <div class="legend-block compact-legend">
+      <span class="legend-title">映射</span>
+      <span class="legend-chip"><b class="size-dot small-dot"></b><b class="size-dot large-dot"></b>${hasFrequency ? "频次大小" : "节点大小"}</span>
+      <span class="legend-chip muted-chip">${categoryCount} 类知识点</span>
+    </div>
+  `;
 }
 
 function renderInsights() {
@@ -266,6 +416,7 @@ function updateGraphViewMode() {
   $$(".view-switcher .segment").forEach((button) => {
     button.classList.toggle("active", button.dataset.view === state.activeGraphView);
   });
+  if (isGraph && state.graphView) window.requestAnimationFrame(() => state.graphView.fit());
   if (!isGraph) window.requestAnimationFrame(renderInsights);
 }
 
@@ -282,6 +433,8 @@ function applyGraphSearch() {
   if (state.activeGraphView !== "graph") return;
   state.graphView?.search($("#graphSearch").value);
 }
+
+const applyGraphSearchDebounced = debounce(applyGraphSearch, 140);
 
 function activateTab(name) {
   $$(".tab").forEach((tab) => tab.classList.toggle("active", tab.dataset.tab === name));
@@ -452,7 +605,10 @@ async function askRag() {
     method: "POST",
     body: JSON.stringify({ llmId: state.llmId, userPrompt, topK: 5, hybridSearch: true })
   });
+  $("#ragQuestion").value = "";
   renderRagResult(result);
+  appendLocalMessage("ragConversation", "user", userPrompt);
+  appendLocalMessage("ragConversation", "assistant", result.answer || "当前知识库中未找到相关信息");
 }
 
 async function sendTeacherFeedback() {
@@ -464,8 +620,20 @@ async function sendTeacherFeedback() {
   const result = await runDedupeOnce(prompt);
   if (result) {
     $("#teacherFeedback").value = "";
+    appendLocalMessage("memoryHistory", "teacher", prompt);
+    appendLocalMessage("memoryHistory", "assistant", result.reason || result.necessity?.reason || "已更新整合结果");
     toast("教师反馈已写入记忆并刷新图谱");
   }
+}
+
+function appendLocalMessage(containerId, role, content) {
+  const container = $(`#${containerId}`);
+  if (!container) return;
+  const article = document.createElement("article");
+  article.className = "chat-message";
+  article.innerHTML = `<span class="role">${escapeHtml(role)}</span><div>${escapeHtml(content)}</div>`;
+  container.append(article);
+  container.scrollTop = container.scrollHeight;
 }
 
 async function refreshReport() {
@@ -483,7 +651,10 @@ function bindEvents() {
     if (state.activeGraphView === "graph") state.graphView?.fit();
     else state.insightsView?.resize();
   });
-  $("#graphSearch").addEventListener("input", applyGraphSearch);
+  $("#graphSearch").addEventListener("input", applyGraphSearchDebounced);
+  $("#graphSearch").addEventListener("keydown", (event) => {
+    if (event.key === "Enter") applyGraphSearch();
+  });
   $("#relationFilter").addEventListener("change", (event) => {
     state.relationFilter = event.target.value;
     renderGraph(state.graph);

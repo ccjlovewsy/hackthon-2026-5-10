@@ -6,7 +6,7 @@
 - 后续需要模型的 API 只传 `llmId`，不在业务请求里重复传 `apiKey`。
 - 示例密钥均为占位值，不是真实生产密钥。
 
-依赖项已写入 `package.json`，迁移后执行 `npm install` 即可安装。主要开源依赖：`openai`、`express`、`pdfjs-dist`、`mammoth`、`xlsx`、`@langchain/core`、`@langchain/textsplitters`、`vectra`、`cytoscape`。
+依赖项已写入 `package.json`，迁移后执行 `npm install` 即可安装。主要开源依赖：`openai`、`express`、`pdfjs-dist`、`mammoth`、`xlsx`、`@langchain/core`、`@langchain/textsplitters`、`vectra`、`cytoscape`、`echarts`。
 
 ## LLM
 
@@ -420,7 +420,7 @@ npm run parse-entity:sample
 }
 ```
 
-压缩统计口径以赛题为准：全局 `original_total_chars` / `original_content_chars` 优先读取 `data/preParseTextbook2JSON-*.json` 中每本教材的 `total_chars`（缺失时回退章节 `char_count` 求和）；`integrated_total_chars` / `integrated_content_chars` 统计当前整合图中实际保留节点的 `definition` 字符数，删除节点计 0，合并节点只统计合并后的结果节点一次。`compression_ratio = integrated_total_chars / original_total_chars`。
+压缩统计口径以赛题为准：`original_total_chars` / `original_content_chars` 先读 `data/preParseTextbook2JSON-*.json` 的每本教材 `total_chars`，缺失时再回退章节 `char_count` 求和；`integrated_total_chars` / `integrated_content_chars` 只统计当前整合图中实际保留节点的 `definition` 字符数，删除节点计 0，合并节点只统计合并后的结果节点一次。`compression_ratio = integrated_total_chars / original_total_chars`。没有整合快照时，接口会保留“待整合后生成”，不会伪造压缩结果。
 
 动作含义：
 
@@ -624,6 +624,16 @@ Web SPA 位于 `src/fronted/`，由 `npm start` 的同一个 Express 服务托�
 
 返回单页应用 HTML。打开 `http://127.0.0.1:3000/` 可使用教材管理、交互式知识图谱、自动去重、RAG 问答、记忆对话、节点详情和报告面板。图谱区域顶部包含视图切换按钮：`图谱`、`矩阵`、`桑基`、`时间轴`。
 
+前端完整工作流只调用本文档已有 API，不依赖未记录接口：
+
+1. 注册 LLM：`POST /api/llm/configLLM`
+2. 上传教材：`POST /api/frontend/uploadTextbookBinary`
+3. 点击教材卡片的“抽取图谱”：先 `GET /api/frontend/textbooks/:textbookId`，再 `POST /api/parseEntityInTextbookJSON2VisualNode/parseEntityInTextbookJSON2VisualNode`，最后 `POST /api/parseEntityInTextbookJSON2VisualNode/exportVisualNodeGraph2DataJSON`
+4. 渲染图谱：`GET /api/frontend/graph?scope=source`
+5. 自动整合：连续调用 `POST /api/NodesDeduplicationAndAlignment/NodesDeduplicationAndAlignment`，再刷新 `GET /api/frontend/graph?scope=integrated`
+6. RAG：`POST /api/rag/index` 建索引，`POST /api/rag/query` 问答，`GET /api/rag/status` 展示状态
+7. 教师反馈：调用 `POST /api/NodesDeduplicationAndAlignment/NodesDeduplicationAndAlignment`，再刷新整合图和对话历史
+
 ### `POST /api/frontend/uploadTextbookBinary`
 
 浏览器上传专用接口。请求体是文件二进制，文件名通过 query 或 `x-filename` 传入；服务端调用已有 `preParseTextbook2JSON`，并写入 `data/`。
@@ -795,4 +805,18 @@ Content-Type: text/markdown; charset=utf-8
 npm run frontend:smoke
 ```
 
-该命令验证：页面仅保留一个“合并节点 / 去重”按钮、连续去重停止策略符合单轮 API 返回 JSON、图谱渲染模块已从页面控制器分离、章节标签不会溢出节点、关系矩阵/桑基/时间轴多视图可生成、前端辅助 API 能返回教材列表、图谱数据、RAG 状态、报告，并能解析浏览器二进制上传的 Markdown 教材。
+真实输出示例：
+
+```text
+✔ frontend dedupe policy continues only while a single API call actually changes the graph
+✔ frontend page exposes one continuous dedupe button and no single-step/loop split
+✔ frontend graph layout gives nodes stable chapter clusters and compact labels
+✔ knowledge graph rendering is isolated from the page controller
+✔ graph insight views provide matrix, sankey, timeline, and relation filtering
+✔ frontend helper APIs expose parsed textbooks, graph, RAG status, report, and binary upload
+ℹ tests 6
+ℹ pass 6
+ℹ fail 0
+```
+
+该命令验证：页面仅保留一个“合并节点 / 去重”按钮、教材卡片提供“抽取图谱”入口、连续去重停止策略符合单轮 API 返回 JSON、图谱渲染模块已从页面控制器分离、章节标签不会溢出节点、关系矩阵/桑基/时间轴多视图可生成、前端辅助 API 能返回教材列表、图谱数据、RAG 状态、报告，并能解析浏览器二进制上传的 Markdown 教材。

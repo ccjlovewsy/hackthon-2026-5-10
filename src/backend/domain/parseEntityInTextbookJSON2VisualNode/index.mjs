@@ -528,8 +528,8 @@ function createGraphBuilder(textbook, { includeChapterTopicNodes }) {
       page: getChapterPage(chapter),
       derived,
       evidence,
-      relation_source: derived ? "derived" : "llm_extracted",
-      fact_eligible: !derived,
+      relation_source: rawRelationship?.relation_source ?? (derived ? "derived" : "llm_extracted"),
+      fact_eligible: rawRelationship?.fact_eligible !== false && !derived,
       derivation_reason: derived ? compactText(derivationReason) : "",
       metadata: inheritedMetadata,
       created_at: now

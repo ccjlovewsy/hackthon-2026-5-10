@@ -33,6 +33,20 @@ export function relationColor(type = "") {
   return RELATION_COLORS[type] ?? "#776c5b";
 }
 
+export function relationLabel(type = "") {
+  const map = {
+    prerequisite: "前置依赖",
+    contains: "包含关系",
+    parallel: "并列关系",
+    applies_to: "应用关系"
+  };
+  return map[type] ?? normalizeString(type);
+}
+
+function normalizeString(value) {
+  return String(value ?? "").replace(/\s+/g, " ").trim();
+}
+
 export function shortLabel(value, limit = 12) {
   const text = String(value ?? "").replace(/\s+/g, "").trim();
   if (text.length <= limit) return text;
@@ -170,8 +184,9 @@ export function graphVisualData(graph) {
           id: edge.id ?? `${edge.source}-${edge.target}-${edge.relation_type}`,
           source: edge.source,
           target: edge.target,
-          label: edge.relation_type,
+          label: relationLabel(edge.relation_type),
           relation: edge.relation_type,
+          relationCode: edge.relation_type,
           color: relationColor(edge.relation_type),
           derived: Boolean(edge.derived || edge.fact_eligible === false),
           description: edge.description,

@@ -12,6 +12,7 @@
     "parse-entity:sample": "node src/backend/domain/parseEntityInTextbookJSON2VisualNode/index.mjs --sample",
     "rag:sample": "node src/backend/domain/RAG/index.mjs --sample",
     "frontend:smoke": "node --test tests/frontend.test.mjs",
+    "frontend:browser-smoke": "node tests/frontend-browser-smoke.mjs",
     "test": "node --test tests/**/*.test.mjs"
   },
   "dependencies": {

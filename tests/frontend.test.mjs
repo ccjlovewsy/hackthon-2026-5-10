@@ -6,7 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { once } from "node:events";
 import { shouldStopDedupe } from "../src/fronted/dedupePolicy.mjs";
-import { chapterBadge, graphVisualData, shortLabel } from "../src/fronted/graphLayout.mjs";
+import { chapterBadge, graphVisualData, relationLabel, shortLabel } from "../src/fronted/graphLayout.mjs";
 import {
   buildMatrixOption,
   buildSankeyOption,
@@ -55,6 +55,15 @@ async function prepareFrontendData(dataDir) {
         char_count: 23
       }
     ]
+  });
+  await writeJson(path.join(dataDir, "preParseTextbook2JSON-测试教材.summary.json"), {
+    textbook_id: "book_frontend",
+    filename: "测试教材.md",
+    title: "测试教材",
+    total_pages: 2,
+    total_chars: 80,
+    chapter_count: 1,
+    chapters: []
   });
 
   await writeJson(path.join(dataDir, "node", "book_frontend.nodes.json"), [
@@ -163,9 +172,13 @@ test("frontend page exposes one continuous dedupe button and no single-step/loop
 
   assert.match(html, /id="dedupeButton"/);
   assert.match(html, /id="compressionChars"/);
+  assert.match(html, /id="ragConversation"/);
   assert.doesNotMatch(html, /dedupeOnceButton|dedupeLoopButton|一轮去重|单次去重/);
   assert.match(html, /合并节点 \/ 去重/);
   assert.match(script, /runDedupeContinuously/);
+  assert.match(script, /buildKnowledgeGraph/);
+  assert.match(script, /parseEntityInTextbookJSON2VisualNode/);
+  assert.match(script, /appendLocalMessage/);
   assert.match(script, /original_total_chars/);
   assert.match(script, /shouldStopDedupe/);
 });
@@ -234,7 +247,8 @@ test("frontend graph layout gives nodes stable chapter clusters and compact labe
 
   assert.equal(nodes.length, 5);
   assert.equal(edges.length, 1);
-  assert.equal(edges[0].data.label, "prerequisite");
+  assert.equal(edges[0].data.label, "前置依赖");
+  assert.equal(edges[0].data.relationCode, "prerequisite");
   assert.notDeepEqual(positions.get("node_1"), positions.get("node_2"));
   assert.notDeepEqual(positions.get("chapter_1"), positions.get("chapter_2"));
   assert.equal(nodes.find((node) => node.data.id === "chapter_1").data.isChapter, true);
@@ -243,6 +257,8 @@ test("frontend graph layout gives nodes stable chapter clusters and compact labe
   assert.equal(nodes.find((node) => node.data.id === "node_1").data.size > nodes.find((node) => node.data.id === "node_2").data.size, true);
   assert.equal(shortLabel("内环境稳态的长期调节机制", 6), "内环境稳态的...");
   assert.equal(chapterBadge("第一章 绪论"), "第一章");
+  assert.equal(relationLabel("applies_to"), "应用关系");
+  assert.equal(relationLabel("contains"), "包含关系");
 });
 
 test("knowledge graph rendering is isolated from the page controller", async () => {
@@ -258,6 +274,24 @@ test("knowledge graph rendering is isolated from the page controller", async () 
   assert.match(html, /data-view="matrix"/);
   assert.match(html, /data-view="sankey"/);
   assert.match(html, /data-view="timeline"/);
+  assert.match(html, /id="graphLegend"/);
+  assert.match(appScript, /renderGraphLegend/);
+  assert.match(appScript, /sourceColor/);
+  assert.match(appScript, /relationColor/);
+});
+
+test("frontend interactions debounce expensive graph updates", async () => {
+  const appScript = await fs.readFile(path.resolve("src/fronted/app.js"), "utf8");
+  const graphModule = await fs.readFile(path.resolve("src/fronted/knowledgeGraphView.mjs"), "utf8");
+  const insightModule = await fs.readFile(path.resolve("src/fronted/graphInsightsView.mjs"), "utf8");
+
+  assert.match(appScript, /function debounce/);
+  assert.match(appScript, /applyGraphSearchDebounced/);
+  assert.match(graphModule, /renderedSignature/);
+  assert.match(graphModule, /cy\.batch/);
+  assert.match(graphModule, /requestAnimationFrame/);
+  assert.match(insightModule, /lastSignature/);
+  assert.match(insightModule, /cancelAnimationFrame/);
 });
 
 test("graph insight views provide matrix, sankey, timeline, and relation filtering", () => {
@@ -277,7 +311,16 @@ test("graph insight views provide matrix, sankey, timeline, and relation filteri
   assert.equal(filterGraphByRelation(graph, "prerequisite").relationships.length, 1);
   assert.equal(filterGraphByRelation(graph, "all").relationships.length, 2);
   assert.equal(buildMatrixOption(graph).series[0].type, "heatmap");
-  assert.equal(buildSankeyOption(graph).series[0].type, "sankey");
+  const sankey = buildSankeyOption(graph);
+  assert.equal(sankey.series[0].type, "sankey");
+  assert.equal(
+    sankey.series[0].data.some((item) => item.name === "关系｜前置依赖"),
+    true
+  );
+  assert.equal(
+    sankey.series[0].data.some((item) => item.name.includes("applies_to") || item.name.includes("prerequisite")),
+    false
+  );
   assert.equal(buildTimelineOption(graph).series[0].type, "bar");
   assert.equal(buildTimelineOption(graph).series[1].type, "line");
 });
@@ -322,6 +365,8 @@ test("frontend helper APIs expose parsed textbooks, graph, RAG status, report, a
       assert.equal(reportResponse.status, 200);
       const reportJson = await reportResponse.json();
       assert.match(reportJson.markdown, /# 整合报告/);
+      assert.equal(reportJson.overview.textbook_count, 1);
+      assert.equal(reportJson.overview.original_chars, 80);
       assert.match(reportJson.output.report, /[\\/]report[\\/]整合报告\.md$/u);
       await assert.doesNotReject(fs.readFile(reportJson.output.report, "utf8"));
       const reportMarkdown = await fs.readFile(reportJson.output.report, "utf8");

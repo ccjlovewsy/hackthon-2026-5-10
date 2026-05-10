@@ -1,3 +1,5 @@
+import { relationLabel } from "./graphLayout.mjs";
+
 function normalizeName(value, fallback = "未命名") {
   return String(value ?? fallback).replace(/\s+/g, " ").trim() || fallback;
 }
@@ -115,7 +117,7 @@ export function buildSankeyOption(graph) {
     const target = nodeById.get(edge.target);
     if (!source || !target) continue;
     const category = ensure(`类别｜${categoryName(source).slice(0, 10)}`, 1);
-    const relation = ensure(`关系｜${normalizeName(edge.relation_type).slice(0, 12)}`, 2);
+    const relation = ensure(`关系｜${relationLabel(edge.relation_type).slice(0, 12)}`, 2);
     const targetCategory = ensure(`指向｜${categoryName(target).slice(0, 10)}`, 3);
     addLink(category, relation, 1);
     addLink(relation, targetCategory, 1);
@@ -186,6 +188,8 @@ export function buildTimelineOption(graph) {
 
 export function createGraphInsightsView({ container, echarts }) {
   let chart = null;
+  let renderFrame = 0;
+  let lastSignature = "";
 
   function showMessage(message) {
     if (!container) return;
@@ -219,7 +223,19 @@ export function createGraphInsightsView({ container, echarts }) {
       return;
     }
     const filtered = filterGraphByRelation(graph, relationType);
-    window.requestAnimationFrame(() => {
+    const signature = JSON.stringify({
+      view,
+      relationType,
+      nodes: filtered.nodes?.length ?? 0,
+      relationships: (filtered.relationships ?? []).map((edge) => `${edge.source}->${edge.target}:${edge.relation_type}`)
+    });
+    if (signature === lastSignature) {
+      chart?.resize();
+      return;
+    }
+    lastSignature = signature;
+    window.cancelAnimationFrame(renderFrame);
+    renderFrame = window.requestAnimationFrame(() => {
       ensureChart().resize();
       chart.setOption(optionFor(view, filtered), true);
       chart.resize();

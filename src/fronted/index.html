@@ -4,6 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>学科知识整合智能体</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/lxgw-wenkai-screen-web@1.522.0/style.min.css" />
     <link rel="stylesheet" href="/styles.css" />
     <script defer src="/vendor/cytoscape/cytoscape.min.js"></script>
     <script defer src="/vendor/echarts/echarts.min.js"></script>
@@ -11,10 +12,10 @@
   </head>
   <body>
     <main class="workspace">
-      <aside class="sidebar panel">
+      <aside class="sidebar panel" aria-label="教材管理">
         <section class="brand-block">
           <div>
-            <p class="eyebrow">AI Textbook Agent</p>
+            <p class="eyebrow">Textbook Agent</p>
             <h1>学科知识整合智能体</h1>
           </div>
           <span id="apiHealth" class="status-pill status-muted">连接中</span>
@@ -22,7 +23,7 @@
 
         <section class="llm-card">
           <div class="section-heading">
-            <h2>模型配置</h2>
+            <h2>模型</h2>
             <span id="llmState" class="mini-state">未注册</span>
           </div>
           <label>
@@ -42,10 +43,10 @@
 
         <section class="upload-card" id="dropzone">
           <div class="drop-inner">
-            <span class="upload-icon">+</span>
+            <span class="upload-icon" aria-hidden="true">+</span>
             <div>
               <h2>教材上传</h2>
-              <p>拖拽或点击选择 PDF / MD / TXT / DOCX / Excel，多文件批量解析。</p>
+              <p>PDF / Markdown / TXT / Word / Excel</p>
             </div>
           </div>
           <input id="fileInput" type="file" multiple accept=".pdf,.md,.markdown,.txt,.docx,.xlsx,.xls,.csv,.tsv" />
@@ -60,7 +61,7 @@
         </section>
       </aside>
 
-      <section class="graph-panel panel">
+      <section class="graph-panel panel" aria-label="知识图谱可视化">
         <header class="graph-toolbar">
           <div>
             <p class="eyebrow">Knowledge Graph</p>
@@ -69,25 +70,25 @@
           <div class="toolbar-actions">
             <label class="search-box">
               <span>搜索</span>
-              <input id="graphSearch" placeholder="动作电位 / 炎症 / 章节" />
+              <input id="graphSearch" placeholder="知识点 / 章节 / 教材" />
             </label>
             <label class="filter-box">
               <span>关系</span>
               <select id="relationFilter">
-                <option value="all">全部</option>
+                <option value="all">全部关系</option>
               </select>
             </label>
-            <div class="segmented view-switcher">
+            <div class="segmented view-switcher" aria-label="图谱视图">
               <button class="segment active" data-view="graph">图谱</button>
               <button class="segment" data-view="matrix">矩阵</button>
               <button class="segment" data-view="sankey">桑基</button>
               <button class="segment" data-view="timeline">时间轴</button>
             </div>
-            <div class="segmented">
+            <div class="segmented" aria-label="图谱范围">
               <button id="sourceGraphButton" class="segment active">源图</button>
               <button id="integratedGraphButton" class="segment">整合图</button>
             </div>
-            <button id="fitGraphButton" class="icon-button" title="适配画布">⌖</button>
+            <button id="fitGraphButton" class="icon-button" title="适配画布" aria-label="适配画布">⌖</button>
           </div>
         </header>
 
@@ -109,30 +110,30 @@
             <strong id="relationCount">0</strong>
           </div>
         </div>
+        <div id="graphLegend" class="graph-legend" aria-label="图谱视觉映射"></div>
 
         <div id="cy" class="graph-canvas active" aria-label="交互式知识图谱"></div>
         <div id="insightChart" class="graph-canvas insight-canvas" aria-label="知识图谱多视图洞察"></div>
         <div id="graphEmpty" class="empty-state">
           <h3>等待图谱数据</h3>
-          <p>运行解析与知识抽取后，节点会在这里渲染。现有 data/node 与 data/side 文件也会自动加载。</p>
+          <p>运行教材解析与知识抽取后自动渲染。</p>
         </div>
       </section>
 
-      <aside class="right-panel panel">
+      <aside class="right-panel panel" aria-label="功能面板">
         <nav class="tabs" aria-label="功能面板">
-          <button class="tab active" data-tab="integrate">自动去重</button>
-          <button class="tab" data-tab="rag">RAG 问答</button>
-          <button class="tab" data-tab="memory">记忆对话</button>
-          <button class="tab" data-tab="detail">节点详情</button>
+          <button class="tab active" data-tab="integrate">整合</button>
+          <button class="tab" data-tab="rag">RAG</button>
+          <button class="tab" data-tab="memory">对话</button>
+          <button class="tab" data-tab="detail">详情</button>
           <button class="tab" data-tab="report">报告</button>
         </nav>
 
         <section id="integrateTab" class="tab-panel active">
           <div class="section-heading">
-            <h2>节点自动去重</h2>
+            <h2>跨教材整合</h2>
             <span id="integrationState" class="mini-state">未加载</span>
           </div>
-          <p class="panel-copy">点击后端会连续调用 API.md 里的单轮整合接口：只要本轮确实改图就继续；一旦返回没有必要去重、没有实际改图或不应继续，就自动停止。</p>
           <label>
             <span>整合提示词</span>
             <textarea id="dedupePrompt" rows="4">请自动选择当前最需要去重的节点，进行跨教材语义对齐和必要性判断。</textarea>
@@ -157,7 +158,7 @@
 
         <section id="ragTab" class="tab-panel">
           <div class="section-heading">
-            <h2>RAG 精准问答</h2>
+            <h2>精准问答</h2>
             <span id="ragState" class="mini-state">未索引</span>
           </div>
           <div class="rag-status">
@@ -167,25 +168,25 @@
           <button id="ragIndexButton" class="secondary-button wide">建立 / 刷新索引</button>
           <label>
             <span>问题</span>
-            <textarea id="ragQuestion" rows="4" placeholder="例如：动作电位如何在有髓神经纤维上传导？"></textarea>
+            <textarea id="ragQuestion" rows="4" placeholder="动作电位如何在有髓神经纤维上传导？"></textarea>
           </label>
           <button id="ragAskButton" class="primary-button wide">提问</button>
+          <div id="ragConversation" class="chat-history"></div>
           <article id="ragAnswer" class="answer-box"></article>
           <div id="citationList" class="citation-list"></div>
         </section>
 
         <section id="memoryTab" class="tab-panel">
           <div class="section-heading">
-            <h2>记忆对话</h2>
+            <h2>教师反馈</h2>
             <span id="memoryState" class="mini-state">会话内持久</span>
           </div>
-          <p class="panel-copy">这里对应 API.md 的教师多轮反馈记忆：历史会保存在 `data/NodesDeduplicationAndAlignment.conversation.json`，后续反馈会基于已有决策继续调整图谱。</p>
           <div id="memoryHistory" class="chat-history"></div>
           <label>
-            <span>教师反馈</span>
-            <textarea id="teacherFeedback" rows="4" placeholder="例如：把“Action potential”和“动作电位”分开，它们在课堂上要分别保留"></textarea>
+            <span>反馈</span>
+            <textarea id="teacherFeedback" rows="4" placeholder="我觉得“免疫应答”不应该被删除，请保留"></textarea>
           </label>
-          <button id="sendFeedbackButton" class="primary-button wide">发送并更新记忆</button>
+          <button id="sendFeedbackButton" class="primary-button wide">发送并更新</button>
         </section>
 
         <section id="detailTab" class="tab-panel">
@@ -194,8 +195,8 @@
             <span id="selectedNodeState" class="mini-state">未选择</span>
           </div>
           <article id="nodeDetail" class="detail-card">
-            <h3>点击图谱节点</h3>
-            <p>会展示名称、定义、章节、页码、教材来源和原文出处。</p>
+            <h3>未选择节点</h3>
+            <p>点击图谱节点查看定义、章节、页码与来源。</p>
           </article>
         </section>
 

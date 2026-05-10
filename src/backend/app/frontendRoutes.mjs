@@ -1,8 +1,11 @@
 import crypto from "node:crypto";
+import { createWriteStream } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { pipeline } from "node:stream/promises";
 import express from "express";
 import { preParseTextbook2JSON } from "../domain/preParseTextbook2JSON/index.mjs";
+import { buildDedupCompressionStats } from "../domain/NodesDeduplicationAndAlignment/index.mjs";
 
 const DEFAULT_DATA_DIR = path.resolve("data");
 const TMP_DIR = path.resolve("tmp");
@@ -51,6 +54,14 @@ function compactText(value, limit = 160) {
   return text.length > limit ? `${text.slice(0, limit)}...` : text;
 }
 
+function isParsedTextbookJson(name) {
+  return name.startsWith("preParseTextbook2JSON-") && !name.endsWith(".summary.json");
+}
+
+async function listParsedTextbookFiles(dataDir) {
+  return listJsonFiles(dataDir, isParsedTextbookJson);
+}
+
 function textbookSummary(textbook, filePath) {
   return {
     textbook_id: textbook.textbook_id,
@@ -71,8 +82,21 @@ function textbookSummary(textbook, filePath) {
   };
 }
 
+function textbookReportSummary(textbook, filePath) {
+  const chapterChars = (textbook.chapters ?? []).reduce((sum, chapter) => sum + Number(chapter.char_count ?? 0), 0);
+  return {
+    textbook_id: textbook.textbook_id,
+    filename: textbook.filename,
+    title: textbook.title,
+    total_chars: Number.isFinite(Number(textbook.total_chars)) ? Number(textbook.total_chars) : chapterChars,
+    chapter_count: Array.isArray(textbook.chapters) ? textbook.chapters.length : 0,
+    file: filePath
+  };
+}
+
 async function parseAndPersistUploadedTextbook({
   buffer,
+  uploadPath,
   originalFilename,
   textbookId,
   title,
@@ -80,19 +104,23 @@ async function parseAndPersistUploadedTextbook({
   dataDir
 }) {
   const ext = path.extname(originalFilename) || (format ? `.${String(format).replace(/^\./, "")}` : ".txt");
-  const digest = crypto
-    .createHash("sha1")
-    .update(originalFilename)
-    .update(buffer)
-    .update(String(Date.now()))
-    .digest("hex")
-    .slice(0, 10);
-  const uploadPath = path.join(TMP_DIR, `frontend-upload-${digest}${ext}`);
+  let sourcePath = uploadPath;
 
-  await fs.writeFile(uploadPath, buffer);
+  if (!sourcePath) {
+    const digest = crypto
+      .createHash("sha1")
+      .update(originalFilename)
+      .update(buffer)
+      .update(String(Date.now()))
+      .digest("hex")
+      .slice(0, 10);
+    sourcePath = path.join(TMP_DIR, `frontend-upload-${digest}${ext}`);
+    await fs.mkdir(TMP_DIR, { recursive: true });
+    await fs.writeFile(sourcePath, buffer);
+  }
 
   const textbook = await preParseTextbook2JSON({
-    textbookAddress: uploadPath,
+    textbookAddress: sourcePath,
     filename: originalFilename,
     textbook_id: textbookId,
     title,
@@ -111,9 +139,25 @@ async function parseAndPersistUploadedTextbook({
     output: {
       textbook: outputPath,
       summary: summaryPath,
-      temporary_upload: uploadPath
+      temporary_upload: sourcePath
     }
   };
+}
+
+async function persistIncomingTextbookStream(req, originalFilename, format) {
+  const ext = path.extname(originalFilename) || (format ? `.${String(format).replace(/^\./, "")}` : ".txt");
+  const digest = crypto
+    .createHash("sha1")
+    .update(originalFilename)
+    .update(String(Date.now()))
+    .update(String(Math.random()))
+    .digest("hex")
+    .slice(0, 10);
+  const uploadPath = path.join(TMP_DIR, `frontend-upload-${digest}${ext}`);
+
+  await fs.mkdir(TMP_DIR, { recursive: true });
+  await pipeline(req, createWriteStream(uploadPath));
+  return uploadPath;
 }
 
 function normalizeArrayJson(value) {
@@ -205,16 +249,17 @@ async function buildReport(dataDir) {
   const reportDir = path.resolve(dataDir, "..", "report");
   const reportPath = path.join(reportDir, "整合报告.md");
 
-  const textbookFiles = await listJsonFiles(dataDir, (name) => name.startsWith("preParseTextbook2JSON-"));
+  const textbookFiles = await listParsedTextbookFiles(dataDir);
   const textbooks = [];
   for (const file of textbookFiles) {
     const textbook = await readJson(file, null);
-    if (textbook?.textbook_id) textbooks.push(textbook);
+    if (textbook?.textbook_id) textbooks.push(textbookReportSummary(textbook, file));
   }
 
   const sourceGraph = await loadGraphFiles(dataDir, "source");
   const integratedGraph = await loadGraphFiles(dataDir, "integrated");
   const integrationSnapshot = await readJson(path.join(dataDir, "NodesDeduplicationAndAlignment.graph.json"), {});
+  const hasIntegrationSnapshot = Boolean(Object.keys(integrationSnapshot).length > 0);
   const decisions = await readJson(path.join(dataDir, "NodesDeduplicationAndAlignment.decisions.json"), []);
   const ragManifest = await readJson(path.join(dataDir, "rag", "manifest.json"), null);
   const actionCounts = Array.isArray(decisions)
@@ -223,24 +268,32 @@ async function buildReport(dataDir) {
         return counts;
       }, {})
     : integrationSnapshot.stats?.action_counts ?? {};
-  const parsedOriginalChars = textbooks.reduce((sum, textbook) => sum + Number(textbook.total_chars ?? 0), 0);
+  const compressionStats = buildDedupCompressionStats({
+    rawNodes: sourceGraph.nodes,
+    currentNodes: hasIntegrationSnapshot ? integratedGraph.nodes : null,
+    parsedTextbooks: textbooks
+  });
+  const parsedOriginalChars = compressionStats.originalChars;
   const originalChars =
     integrationSnapshot.stats?.original_total_chars ??
     integrationSnapshot.compression?.global?.original_total_chars ??
     integrationSnapshot.compression?.global?.original_content_chars ??
     parsedOriginalChars;
-  const currentChars =
-    integrationSnapshot.stats?.integrated_total_chars ??
-    integrationSnapshot.compression?.global?.integrated_total_chars ??
-    integrationSnapshot.compression?.global?.integrated_content_chars ??
-    null;
+  const currentChars = hasIntegrationSnapshot
+    ? (integrationSnapshot.stats?.integrated_total_chars ??
+      integrationSnapshot.compression?.global?.integrated_total_chars ??
+      integrationSnapshot.compression?.global?.integrated_content_chars ??
+      integrationSnapshot.compression?.current_chars ??
+      integrationSnapshot.stats?.current_chars ??
+      compressionStats.integratedChars)
+    : null;
   const compressionRatio =
     integrationSnapshot.stats?.compression_ratio ??
     (Number.isFinite(currentChars) && originalChars > 0 ? Number((currentChars / originalChars).toFixed(4)) : null);
   const compressionSource =
     integrationSnapshot.stats?.compression_source ??
     integrationSnapshot.compression?.global?.compression_source ??
-    (parsedOriginalChars > 0 ? "parsed_textbook_total_chars" : null);
+    compressionStats.source;
 
   const markdown = [
     "# 整合报告",
@@ -251,7 +304,7 @@ async function buildReport(dataDir) {
     `- 压缩比：${Number.isFinite(compressionRatio) ? `${(compressionRatio * 100).toFixed(2)}%` : "待整合后生成"}`,
     `- 整合决策：${Array.isArray(decisions) ? decisions.length : integrationSnapshot.stats?.decision_count ?? 0}`,
     `- 决策分布：merge ${actionCounts.merge ?? 0} / keep ${actionCounts.keep ?? 0} / remove ${actionCounts.remove ?? 0}`,
-    `- 知识图谱：整合前 ${sourceGraph.stats.node_count} 节点、${sourceGraph.stats.relationship_count} 关系；当前 ${integratedGraph.stats.node_count} 节点、${integratedGraph.stats.relationship_count} 关系`,
+    `- 知识图谱：整合前 ${sourceGraph.stats.node_count} 节点、${sourceGraph.stats.relationship_count} 条事实关系（另有 ${sourceGraph.stats.derived_relationship_count ?? 0} 条派生展示边）；当前 ${integratedGraph.stats.node_count} 节点、${integratedGraph.stats.relationship_count} 条事实关系（另有 ${integratedGraph.stats.derived_relationship_count ?? 0} 条派生展示边）`,
     `- RAG 索引：${ragManifest ? `${ragManifest.stats?.textbook_count ?? 0} 本教材，${ragManifest.stats?.chunk_count ?? 0} 个知识块` : "未建立"}`,
     `- 字数统计口径：原始总字数来自预解析教材 JSON 的 total_chars/章节 char_count；整合后字数来自当前整合图保留节点的 definition 字符数。${compressionSource ? `当前来源：${compressionSource}` : ""}`,
     "",
@@ -298,7 +351,7 @@ export function createFrontendRouter({ dataDir = DEFAULT_DATA_DIR } = {}) {
 
   router.get("/textbooks", async (_req, res, next) => {
     try {
-      const files = await listJsonFiles(dataDir, (name) => name.startsWith("preParseTextbook2JSON-"));
+      const files = await listParsedTextbookFiles(dataDir);
       const textbooks = [];
       for (const file of files) {
         const textbook = await readJson(file, null);
@@ -312,7 +365,7 @@ export function createFrontendRouter({ dataDir = DEFAULT_DATA_DIR } = {}) {
 
   router.get("/textbooks/:textbookId", async (req, res, next) => {
     try {
-      const files = await listJsonFiles(dataDir, (name) => name.startsWith("preParseTextbook2JSON-"));
+      const files = await listParsedTextbookFiles(dataDir);
       for (const file of files) {
         const textbook = await readJson(file, null);
         if (textbook?.textbook_id === req.params.textbookId) {
@@ -369,12 +422,14 @@ export function createFrontendRouter({ dataDir = DEFAULT_DATA_DIR } = {}) {
   router.post("/uploadTextbookBinary", async (req, res, next) => {
     try {
       const originalFilename = safeBasename(req.query.filename ?? req.header("x-filename"), "textbook.txt");
+      const format = req.query.format;
+      const uploadPath = await persistIncomingTextbookStream(req, originalFilename, format);
       const result = await parseAndPersistUploadedTextbook({
-        buffer: Buffer.isBuffer(req.body) ? req.body : Buffer.from(req.body ?? ""),
+        uploadPath,
         originalFilename,
         textbookId: req.query.textbook_id,
         title: req.query.title,
-        format: req.query.format,
+        format,
         dataDir
       });
 
