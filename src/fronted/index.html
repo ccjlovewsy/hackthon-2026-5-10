@@ -24,21 +24,46 @@
         <section class="llm-card">
           <div class="section-heading">
             <h2>模型</h2>
-            <span id="llmState" class="mini-state">未注册</span>
+            <span class="mini-state">双模型</span>
           </div>
-          <label>
-            <span>Endpoint</span>
-            <input id="llmEndpoint" autocomplete="off" placeholder="https://api.openai.com/v1" />
-          </label>
-          <label>
-            <span>API Key</span>
-            <input id="llmKey" type="password" autocomplete="off" placeholder="sk-..." />
-          </label>
-          <label>
-            <span>默认模型</span>
-            <input id="llmModel" autocomplete="off" value="gpt-5.2" />
-          </label>
-          <button id="configLlmButton" class="primary-button">注册 LLM</button>
+          <div class="llm-group">
+            <div class="section-heading">
+              <h3>交互 / 推理</h3>
+              <span id="llmState" class="mini-state">未注册</span>
+            </div>
+            <label>
+              <span>Endpoint</span>
+              <input id="llmEndpoint" autocomplete="off" placeholder="https://api.openai.com/v1" />
+            </label>
+            <label>
+              <span>API Key</span>
+              <input id="llmKey" type="password" autocomplete="off" placeholder="sk-..." />
+            </label>
+            <label>
+              <span>模型</span>
+              <input id="llmModel" autocomplete="off" value="gpt-5.2" />
+            </label>
+            <button id="configLlmButton" class="primary-button">注册交互模型</button>
+          </div>
+          <div class="llm-group">
+            <div class="section-heading">
+              <h3>嵌入向量</h3>
+              <span id="embeddingLlmState" class="mini-state">未注册</span>
+            </div>
+            <label>
+              <span>Endpoint</span>
+              <input id="embeddingLlmEndpoint" autocomplete="off" placeholder="https://api.openai.com/v1" />
+            </label>
+            <label>
+              <span>API Key</span>
+              <input id="embeddingLlmKey" type="password" autocomplete="off" placeholder="sk-..." />
+            </label>
+            <label>
+              <span>模型</span>
+              <input id="embeddingLlmModel" autocomplete="off" value="text-embedding-3-small" />
+            </label>
+            <button id="configEmbeddingLlmButton" class="secondary-button">注册嵌入模型</button>
+          </div>
         </section>
 
         <section class="upload-card" id="dropzone">

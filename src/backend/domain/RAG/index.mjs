@@ -347,6 +347,11 @@ async function resolveEmbeddings(options) {
     });
   }
 
+  const explicitLLM = options.embeddingLLM ?? options.embeddingLlm ?? options.embedding_llm;
+  if (explicitLLM) {
+    return createEmbeddingsFromLLM(explicitLLM, options);
+  }
+
   const vectorEnv = await loadVectorEnv(options.vectorEnvPath);
   const envEndpoint = pickFirstNonEmpty(
     process.env.RAG_EMBEDDING_ENDPOINT,
@@ -943,6 +948,15 @@ function emptyRagAnswer(query, manifest) {
   };
 }
 
+/**
+ * Answer a textbook question with hybrid retrieval and verified citations.
+ *
+ * @param {Object} input
+ * @param {string} input.userPrompt User question; aliases include prompt/question/query.
+ * @param {Object} input.llm Registered LLM used to generate the final answer.
+ * @param {Object} [input.embeddings] Optional embedding adapter for tests or local providers.
+ * @returns {Promise<{answer: string, citations: Array, source_chunks: Array<string>, citation_verification: Object}>}
+ */
 export async function ragRead(input = {}) {
   const query = compactText(input.userPrompt ?? input.prompt ?? input.question ?? input.query);
   if (!query) {

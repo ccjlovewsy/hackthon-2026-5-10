@@ -171,10 +171,16 @@ test("frontend page exposes one continuous dedupe button and no single-step/loop
   const script = await fs.readFile(path.resolve("src/fronted/app.js"), "utf8");
 
   assert.match(html, /id="dedupeButton"/);
+  assert.match(html, /id="configLlmButton"/);
+  assert.match(html, /id="configEmbeddingLlmButton"/);
+  assert.match(html, /id="embeddingLlmModel"/);
   assert.match(html, /id="compressionChars"/);
   assert.match(html, /id="ragConversation"/);
   assert.doesNotMatch(html, /dedupeOnceButton|dedupeLoopButton|一轮去重|单次去重/);
   assert.match(html, /合并节点 \/ 去重/);
+  assert.match(script, /chatLlmId/);
+  assert.match(script, /embeddingLlmId/);
+  assert.match(script, /embeddingModel/);
   assert.match(script, /runDedupeContinuously/);
   assert.match(script, /buildKnowledgeGraph/);
   assert.match(script, /parseEntityInTextbookJSON2VisualNode/);

@@ -4,7 +4,12 @@ import { createKnowledgeGraphView } from "./knowledgeGraphView.mjs";
 import { relationColor, relationLabel, sourceColor } from "./graphLayout.mjs";
 
 const state = {
-  llmId: localStorage.getItem("textbook-agent-llm-id") || "",
+  chatLlmId:
+    localStorage.getItem("textbook-agent-chat-llm-id") ||
+    localStorage.getItem("textbook-agent-llm-id") ||
+    "",
+  embeddingLlmId: localStorage.getItem("textbook-agent-embedding-llm-id") || "",
+  embeddingModel: localStorage.getItem("textbook-agent-embedding-model") || "text-embedding-3-small",
   graphScope: "source",
   graph: { nodes: [], relationships: [], stats: {} },
   textbooks: [],
@@ -92,12 +97,38 @@ async function checkHealth() {
   }
 }
 
-async function configureLLM() {
-  const endpoint = $("#llmEndpoint").value.trim();
-  const apiKey = $("#llmKey").value.trim();
-  const defaultModel = $("#llmModel").value.trim() || "gpt-5.2";
+const llmForms = {
+  chat: {
+    endpoint: "#llmEndpoint",
+    apiKey: "#llmKey",
+    model: "#llmModel",
+    state: "#llmState",
+    stateKey: "chatLlmId",
+    storageKey: "textbook-agent-chat-llm-id",
+    modelStorageKey: "textbook-agent-chat-model",
+    defaultModel: "gpt-5.2",
+    label: "交互模型"
+  },
+  embedding: {
+    endpoint: "#embeddingLlmEndpoint",
+    apiKey: "#embeddingLlmKey",
+    model: "#embeddingLlmModel",
+    state: "#embeddingLlmState",
+    stateKey: "embeddingLlmId",
+    storageKey: "textbook-agent-embedding-llm-id",
+    modelStorageKey: "textbook-agent-embedding-model",
+    defaultModel: "text-embedding-3-small",
+    label: "嵌入模型"
+  }
+};
+
+async function configureLLM(role = "chat") {
+  const form = llmForms[role];
+  const endpoint = $(form.endpoint).value.trim();
+  const apiKey = $(form.apiKey).value.trim();
+  const defaultModel = $(form.model).value.trim() || form.defaultModel;
   if (!endpoint || !apiKey) {
-    toast("请填写 endpoint 和 API Key", "bad");
+    toast(`请填写${form.label} endpoint 和 API Key`, "bad");
     return;
   }
 
@@ -105,10 +136,12 @@ async function configureLLM() {
     method: "POST",
     body: JSON.stringify({ endpoint, apiKey, defaultModel })
   });
-  state.llmId = result.llm.id;
-  localStorage.setItem("textbook-agent-llm-id", state.llmId);
-  $("#llmState").textContent = `已注册 ${result.llm.defaultModel}`;
-  toast("LLM 注册完成");
+  state[form.stateKey] = result.llm.id;
+  if (role === "embedding") state.embeddingModel = result.llm.defaultModel;
+  localStorage.setItem(form.storageKey, result.llm.id);
+  localStorage.setItem(form.modelStorageKey, result.llm.defaultModel);
+  $(form.state).textContent = `已注册 ${result.llm.defaultModel}`;
+  toast(`${form.label}注册完成`);
 }
 
 function renderTextbooks() {
@@ -170,7 +203,7 @@ async function refreshTextbooks() {
 }
 
 async function buildKnowledgeGraph(textbookId) {
-  if (!requireLLM()) return;
+  if (!requireChatLLM()) return;
   const id = textbookId || state.selectedTextbookId || state.textbooks[0]?.textbook_id;
   if (!id) {
     toast("请先上传或选择一本教材", "bad");
@@ -187,7 +220,7 @@ async function buildKnowledgeGraph(textbookId) {
     const graph = await api("/api/parseEntityInTextbookJSON2VisualNode/parseEntityInTextbookJSON2VisualNode", {
       method: "POST",
       body: JSON.stringify({
-        llmId: state.llmId,
+        llmId: state.chatLlmId,
         textbookJSON: textbook,
         maxNodesPerChapter: 12,
         maxChapterChars: 9000
@@ -491,20 +524,35 @@ async function refreshIntegration() {
   return payload;
 }
 
-function requireLLM() {
-  if (!state.llmId) {
-    toast("请先注册 LLM，或刷新后重新注册。", "bad");
+function requireChatLLM() {
+  if (!state.chatLlmId) {
+    toast("请先注册交互模型。", "bad");
     return false;
   }
   return true;
 }
 
+function requireEmbeddingLLM() {
+  if (!state.embeddingLlmId) {
+    toast("请先注册嵌入模型。", "bad");
+    return false;
+  }
+  return true;
+}
+
+function currentEmbeddingModel() {
+  const model = $("#embeddingLlmModel")?.value.trim() || state.embeddingModel || "text-embedding-3-small";
+  state.embeddingModel = model;
+  localStorage.setItem("textbook-agent-embedding-model", model);
+  return model;
+}
+
 async function runDedupeOnce(prompt) {
-  if (!requireLLM()) return null;
+  if (!requireChatLLM()) return null;
   const result = await api("/api/NodesDeduplicationAndAlignment/NodesDeduplicationAndAlignment", {
     method: "POST",
     body: JSON.stringify({
-      llmId: state.llmId,
+      llmId: state.chatLlmId,
       userPrompt: prompt,
       maxCandidates: 10
     })
@@ -518,7 +566,7 @@ async function runDedupeOnce(prompt) {
 }
 
 async function runDedupeContinuously(prompt) {
-  if (!requireLLM()) return;
+  if (!requireChatLLM()) return;
   const button = $("#dedupeButton");
   button.disabled = true;
   const originalText = button.textContent;
@@ -557,10 +605,13 @@ async function refreshRagStatus() {
 }
 
 async function indexRag() {
-  if (!requireLLM()) return;
+  if (!requireEmbeddingLLM()) return;
   const result = await api("/api/rag/index", {
     method: "POST",
-    body: JSON.stringify({ llmId: state.llmId })
+    body: JSON.stringify({
+      embeddingLlmId: state.embeddingLlmId,
+      embeddingModel: currentEmbeddingModel()
+    })
   });
   toast(`RAG 索引完成：${result.manifest.stats.chunk_count} 个知识块`);
   await refreshRagStatus();
@@ -595,7 +646,7 @@ function renderRagResult(result) {
 }
 
 async function askRag() {
-  if (!requireLLM()) return;
+  if (!requireChatLLM() || !requireEmbeddingLLM()) return;
   const userPrompt = $("#ragQuestion").value.trim();
   if (!userPrompt) {
     toast("请输入问题", "bad");
@@ -603,7 +654,14 @@ async function askRag() {
   }
   const result = await api("/api/rag/query", {
     method: "POST",
-    body: JSON.stringify({ llmId: state.llmId, userPrompt, topK: 5, hybridSearch: true })
+    body: JSON.stringify({
+      llmId: state.chatLlmId,
+      embeddingLlmId: state.embeddingLlmId,
+      embeddingModel: currentEmbeddingModel(),
+      userPrompt,
+      topK: 5,
+      hybridSearch: true
+    })
   });
   $("#ragQuestion").value = "";
   renderRagResult(result);
@@ -642,7 +700,8 @@ async function refreshReport() {
 }
 
 function bindEvents() {
-  $("#configLlmButton").addEventListener("click", () => configureLLM().catch((error) => toast(error.message, "bad")));
+  $("#configLlmButton").addEventListener("click", () => configureLLM("chat").catch((error) => toast(error.message, "bad")));
+  $("#configEmbeddingLlmButton").addEventListener("click", () => configureLLM("embedding").catch((error) => toast(error.message, "bad")));
   $("#refreshTextbooksButton").addEventListener("click", () => refreshTextbooks().catch((error) => toast(error.message, "bad")));
   $("#fileInput").addEventListener("change", (event) => uploadFiles([...event.target.files]).catch((error) => toast(error.message, "bad")));
   $("#sourceGraphButton").addEventListener("click", () => refreshGraph("source").catch((error) => toast(error.message, "bad")));
@@ -690,7 +749,9 @@ function bindEvents() {
 
 async function init() {
   bindEvents();
-  if (state.llmId) $("#llmState").textContent = "已缓存";
+  if (state.chatLlmId) $("#llmState").textContent = "已缓存";
+  if (state.embeddingLlmId) $("#embeddingLlmState").textContent = "已缓存";
+  if (state.embeddingModel) $("#embeddingLlmModel").value = state.embeddingModel;
   await checkHealth();
   await Promise.all([
     refreshTextbooks(),

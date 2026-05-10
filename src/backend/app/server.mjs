@@ -27,11 +27,11 @@ export function createApp(options = {}) {
   app.use("/api/preParseTextbook2JSON", createPreParseTextbook2JSONRouter());
   app.use(
     "/api/parseEntityInTextbookJSON2VisualNode",
-    createParseEntityInTextbookJSON2VisualNodeRouter({ registry: defaultLLMRegistry })
+    createParseEntityInTextbookJSON2VisualNodeRouter({ registry: defaultLLMRegistry, dataDir })
   );
   app.use(
     "/api/NodesDeduplicationAndAlignment",
-    createNodesDeduplicationAndAlignmentRouter({ registry: defaultLLMRegistry })
+    createNodesDeduplicationAndAlignmentRouter({ registry: defaultLLMRegistry, dataDir })
   );
   const ragRouter = createRAGRouter({ registry: defaultLLMRegistry, dataDir });
   app.use("/api/RAG", ragRouter);
@@ -50,7 +50,8 @@ export function createApp(options = {}) {
 
 if (import.meta.url === `file://${process.argv[1]}`) {
   const port = Number(process.env.PORT ?? 3000);
-  createApp().listen(port, () => {
-    console.log(`Backend API listening on http://127.0.0.1:${port}`);
+  const host = process.env.HOST ?? "127.0.0.1";
+  createApp().listen(port, host, () => {
+    console.log(`Backend API listening on http://${host}:${port}`);
   });
 }

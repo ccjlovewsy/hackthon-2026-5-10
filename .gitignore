@@ -32,7 +32,9 @@ lerna-debug.log*
 
 # DATA
 data/
+data/textbooks/*.pdf
 origin-textbooks/
+*.pdf
 
 # --- 缓存与临时文件 ---
 .cache/

@@ -6,22 +6,22 @@ import { ragParse, ragRead } from "../domain/RAG/index.mjs";
 export function createRAGRouter({ registry = new Map(), dataDir } = {}) {
   const router = express.Router();
 
-  function resolveLLM(req, res, { required = true } = {}) {
-    const { llmId } = req.body ?? {};
-    const llm = llmId ? registry.get(llmId) : null;
+  function resolveLLM(req, res, { field = "llmId", required = true, role = "LLM" } = {}) {
+    const id = req.body?.[field];
+    const llm = id ? registry.get(id) : null;
 
     if (!llm && required) {
       res.status(404).json({
         error: "LLM_NOT_FOUND",
-        message: "Call /api/llm/configLLM first and pass llmId."
+        message: `Call /api/llm/configLLM first and pass ${field} for ${role}.`
       });
       return null;
     }
 
-    if (llmId && !llm) {
+    if (id && !llm) {
       res.status(404).json({
         error: "LLM_NOT_FOUND",
-        message: `No registered LLM found for ${llmId}.`
+        message: `No registered ${role} found for ${id}.`
       });
       return null;
     }
@@ -53,13 +53,22 @@ export function createRAGRouter({ registry = new Map(), dataDir } = {}) {
 
   async function handleIndex(req, res, next, { requireLLM = false } = {}) {
     try {
-      const llm = resolveLLM(req, res, { required: requireLLM });
-      if ((requireLLM || req.body?.llmId) && !llm) return;
-      const { llmId: _llmId, ...options } = req.body ?? {};
+      const embeddingLlm = resolveLLM(req, res, {
+        field: req.body?.embeddingLlmId ? "embeddingLlmId" : "llmId",
+        required: requireLLM,
+        role: "embedding LLM"
+      });
+      if ((requireLLM || req.body?.embeddingLlmId || req.body?.llmId) && !embeddingLlm) return;
+      const { llmId: _llmId, embeddingLlmId: _embeddingLlmId, ...options } = req.body ?? {};
       const result = await ragParse({
         ...options,
         dataDir: options.dataDir ?? dataDir,
-        ...(llm ? { llm } : {})
+        ...(embeddingLlm
+          ? {
+              embeddingLLM: embeddingLlm,
+              embeddingModel: options.embeddingModel ?? embeddingLlm.defaultModel
+            }
+          : {})
       });
       res.json({
         ok: true,
@@ -73,12 +82,24 @@ export function createRAGRouter({ registry = new Map(), dataDir } = {}) {
 
   async function handleQuery(req, res, next, { requireLLM = true } = {}) {
     try {
-      const llm = resolveLLM(req, res, { required: requireLLM });
+      const llm = resolveLLM(req, res, { required: requireLLM, role: "chat LLM" });
       if (!llm) return;
-      const { llmId: _llmId, ...options } = req.body ?? {};
+      const embeddingLlm = resolveLLM(req, res, {
+        field: "embeddingLlmId",
+        required: false,
+        role: "embedding LLM"
+      });
+      if (req.body?.embeddingLlmId && !embeddingLlm) return;
+      const { llmId: _llmId, embeddingLlmId: _embeddingLlmId, ...options } = req.body ?? {};
       const result = await ragRead({
         ...options,
         dataDir: options.dataDir ?? dataDir,
+        ...(embeddingLlm
+          ? {
+              embeddingLLM: embeddingLlm,
+              embeddingModel: options.embeddingModel ?? embeddingLlm.defaultModel
+            }
+          : {}),
         llm
       });
       res.json(result);

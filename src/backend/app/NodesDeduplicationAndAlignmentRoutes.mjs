@@ -1,7 +1,7 @@
 import express from "express";
 import { NodesDeduplicationAndAlignment } from "../domain/NodesDeduplicationAndAlignment/index.mjs";
 
-export function createNodesDeduplicationAndAlignmentRouter({ registry = new Map() } = {}) {
+export function createNodesDeduplicationAndAlignmentRouter({ registry = new Map(), dataDir } = {}) {
   const router = express.Router();
 
   router.post("/NodesDeduplicationAndAlignment", async (req, res, next) => {
@@ -19,6 +19,7 @@ export function createNodesDeduplicationAndAlignmentRouter({ registry = new Map(
 
       const result = await NodesDeduplicationAndAlignment({
         ...options,
+        dataDir: options.dataDir ?? dataDir,
         llm
       });
       res.json(result.response);

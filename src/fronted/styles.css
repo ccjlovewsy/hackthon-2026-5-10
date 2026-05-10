@@ -171,6 +171,18 @@ h3 {
   gap: 10px;
 }
 
+.llm-group {
+  display: grid;
+  gap: 8px;
+  border-radius: 8px;
+  background: #fff;
+  padding: 10px;
+}
+
+.llm-group h3 {
+  font-size: 14px;
+}
+
 label {
   display: grid;
   gap: 6px;

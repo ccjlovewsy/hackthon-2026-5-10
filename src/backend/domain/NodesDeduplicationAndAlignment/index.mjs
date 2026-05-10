@@ -761,12 +761,24 @@ function extractFirstJSONObject(text) {
 async function askLLMForDecision({ llm, llmOptions, userPrompt, targetNode, candidateNodes, currentGraph, previousDecisions }) {
   const result = await LLMComplete(llm, {
     messages: buildAlignmentMessages({ userPrompt, targetNode, candidateNodes, currentGraph, previousDecisions }),
-    temperature: llmOptions.temperature ?? 0,
+    temperature: llmOptions.temperature,
     maxTokens: llmOptions.maxTokens ?? 1400,
     model: llmOptions.model,
     responseFormat: "json_object"
   });
-  return extractFirstJSONObject(result.answer);
+  try {
+    return extractFirstJSONObject(result.answer);
+  } catch {
+    return {
+      action: "keep",
+      necessity: {
+        necessary: false,
+        reason: "模型没有返回可解析 JSON，本轮先保留节点并停止，避免误合并。"
+      },
+      affected_nodes: [targetNode.id],
+      reason: "模型输出格式不可解析，已保留当前节点。"
+    };
+  }
 }
 
 function resolveReturnedNodeId(value, nodeById, idByName) {

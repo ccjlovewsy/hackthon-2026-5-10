@@ -1,0 +1,18 @@
+services:
+  app:
+    build: .
+    ports:
+      - "3000:3000"
+    environment:
+      - PORT=${PORT:-3000}
+      - HOST=0.0.0.0
+      - NODE_ENV=production
+      - RAG_EMBEDDING_ENDPOINT=${RAG_EMBEDDING_ENDPOINT:-}
+      - RAG_EMBEDDING_API_KEY=${RAG_EMBEDDING_API_KEY:-}
+      - RAG_EMBEDDING_MODEL=${RAG_EMBEDDING_MODEL:-text-embedding-3-small}
+      - EMBEDDING_DIMENSIONS=${EMBEDDING_DIMENSIONS:-}
+      - EMBEDDING_MAX_TOKENS=${EMBEDDING_MAX_TOKENS:-8191}
+    volumes:
+      - ./data:/app/data
+      - ./tmp:/app/tmp
+    restart: unless-stopped

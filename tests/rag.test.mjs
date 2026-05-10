@@ -444,3 +444,115 @@ test("RAG HTTP API exposes spec routes and keeps legacy aliases", async () => {
     }
   });
 });
+
+test("RAG HTTP API can use separate chat and embedding LLM registrations", async () => {
+  await withTempDir(async (dataDir) => {
+    await prepareDataDir(dataDir);
+    const calls = [];
+    const { server: providerServer, url: providerUrl } = await startServer(async (req, res) => {
+      if (req.method !== "POST") {
+        res.writeHead(404, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "not found" }));
+        return;
+      }
+
+      const body = await readJson(req);
+      calls.push({ url: req.url, body });
+
+      if (req.url === "/v1/embeddings") {
+        const input = Array.isArray(body.input) ? body.input : [body.input];
+        const embeddingModel = new KeywordEmbeddings();
+        const embeddings = await embeddingModel.createEmbeddings(input);
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(
+          JSON.stringify({
+            model: body.model,
+            data: embeddings.output.map((embedding, index) => ({
+              object: "embedding",
+              index,
+              embedding
+            }))
+          })
+        );
+        return;
+      }
+
+      if (req.url === "/v1/chat/completions") {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(
+          JSON.stringify({
+            model: body.model,
+            choices: [
+              {
+                index: 0,
+                message: {
+                  role: "assistant",
+                  content: "炎症是活体组织对损伤因子的防御性反应。[测试生理学, 第二章 炎症反应, 第 7 页]"
+                },
+                finish_reason: "stop"
+              }
+            ]
+          })
+        );
+        return;
+      }
+
+      res.writeHead(404, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "not found" }));
+    });
+
+    const app = createApp({ dataDir });
+    const { server: appServer, url: appUrl } = await startServer(app);
+
+    try {
+      const register = async (defaultModel) => {
+        const response = await fetch(`${appUrl}/api/llm/configLLM`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            endpoint: `${providerUrl}/v1`,
+            apiKey: "test-key",
+            defaultModel
+          })
+        });
+        assert.equal(response.status, 201);
+        return (await response.json()).llm;
+      };
+
+      const chatLlm = await register("test-chat-model");
+      const embeddingLlm = await register("test-embedding-model");
+
+      const parseResponse = await fetch(`${appUrl}/api/rag/index`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          embeddingLlmId: embeddingLlm.id,
+          embeddingModel: "test-embedding-model"
+        })
+      });
+      assert.equal(parseResponse.status, 200, parseResponse.status === 200 ? "" : await parseResponse.text());
+
+      const readResponse = await fetch(`${appUrl}/api/rag/query`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          llmId: chatLlm.id,
+          embeddingLlmId: embeddingLlm.id,
+          embeddingModel: "test-embedding-model",
+          userPrompt: "炎症是什么？"
+        })
+      });
+      assert.equal(readResponse.status, 200, readResponse.status === 200 ? "" : await readResponse.text());
+
+      const embeddingCalls = calls.filter((call) => call.url === "/v1/embeddings");
+      const chatCalls = calls.filter((call) => call.url === "/v1/chat/completions");
+      assert.ok(embeddingCalls.length >= 2);
+      assert.equal(embeddingCalls.every((call) => call.body.model === "test-embedding-model"), true);
+      assert.equal(chatCalls.length, 1);
+      assert.equal(chatCalls[0].body.model, "test-chat-model");
+    } finally {
+      await closeServer(appServer);
+      await closeServer(providerServer);
+    }
+  });
+});

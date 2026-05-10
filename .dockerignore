@@ -1,0 +1,12 @@
+.git
+node_modules
+npm-debug.log*
+.env
+.env.*
+data
+origin-textbooks
+tmp
+*.pdf
+.DS_Store
+coverage
+.cache

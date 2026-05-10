@@ -272,8 +272,8 @@ npm run preparse:sample
     "textbook_count": 1
   },
   "output": {
-    "graph_snapshot": "/Users/renxiqing/hackthon/data/parseEntityInTextbookJSON2VisualNode-book_03.graph.json",
-    "latest_graph_snapshot": "/Users/renxiqing/hackthon/data/parseEntityInTextbookJSON2VisualNode.latest.json"
+    "graph_snapshot": "data/parseEntityInTextbookJSON2VisualNode-book_03.graph.json",
+    "latest_graph_snapshot": "data/parseEntityInTextbookJSON2VisualNode.latest.json"
   }
 }
 ```
@@ -334,8 +334,8 @@ npm run parse-entity:sample
   "visual_relationship_count": 10,
   "derived_relationship_count": 6,
   "relation_types": ["applies_to", "contains", "prerequisite"],
-  "node_file": "/Users/renxiqing/hackthon/data/node/book_03.nodes.json",
-  "side_file": "/Users/renxiqing/hackthon/data/side/book_03.sides.json"
+  "node_file": "data/node/book_03.nodes.json",
+  "side_file": "data/side/book_03.sides.json"
 }
 ```
 
@@ -410,12 +410,12 @@ npm run parse-entity:sample
     }
   },
   "output": {
-    "graphPath": "/Users/renxiqing/hackthon/data/NodesDeduplicationAndAlignment.graph.json",
-    "latestPath": "/Users/renxiqing/hackthon/data/NodesDeduplicationAndAlignment.latest.json",
-    "decisionsPath": "/Users/renxiqing/hackthon/data/NodesDeduplicationAndAlignment.decisions.json",
-    "conversationPath": "/Users/renxiqing/hackthon/data/NodesDeduplicationAndAlignment.conversation.json",
-    "nodePath": "/Users/renxiqing/hackthon/data/node/NodesDeduplicationAndAlignment.nodes.json",
-    "sidePath": "/Users/renxiqing/hackthon/data/side/NodesDeduplicationAndAlignment.sides.json"
+    "graphPath": "data/NodesDeduplicationAndAlignment.graph.json",
+    "latestPath": "data/NodesDeduplicationAndAlignment.latest.json",
+    "decisionsPath": "data/NodesDeduplicationAndAlignment.decisions.json",
+    "conversationPath": "data/NodesDeduplicationAndAlignment.conversation.json",
+    "nodePath": "data/node/NodesDeduplicationAndAlignment.nodes.json",
+    "sidePath": "data/side/NodesDeduplicationAndAlignment.sides.json"
   }
 }
 ```
@@ -508,9 +508,9 @@ RAG 模块只暴露两个 API：
     }
   },
   "output": {
-    "manifest": "/Users/renxiqing/hackthon/data/rag/manifest.json",
-    "chunks": "/Users/renxiqing/hackthon/data/rag/chunks.json",
-    "vector_index": "/Users/renxiqing/hackthon/data/rag/vector/index.json"
+    "manifest": "data/rag/manifest.json",
+    "chunks": "data/rag/chunks.json",
+    "vector_index": "data/rag/vector/index.json"
   }
 }
 ```
@@ -566,7 +566,7 @@ RAG 模块只暴露两个 API：
     "index_status": {
       "textbook_count": 1,
       "chunk_count": 183,
-      "manifest": "/Users/renxiqing/hackthon/data/rag/manifest.json"
+      "manifest": "data/rag/manifest.json"
     }
   }
 }
@@ -663,9 +663,9 @@ Content-Type: text/markdown; charset=utf-8
     "chapter_count": 1
   },
   "output": {
-    "textbook": "/Users/renxiqing/hackthon/data/preParseTextbook2JSON-测试.json",
-    "summary": "/Users/renxiqing/hackthon/data/preParseTextbook2JSON-测试.summary.json",
-    "temporary_upload": "/Users/renxiqing/hackthon/tmp/frontend-upload-a1b2c3d4e5.md"
+    "textbook": "data/preParseTextbook2JSON-测试.json",
+    "summary": "data/preParseTextbook2JSON-测试.summary.json",
+    "temporary_upload": "tmp/frontend-upload-a1b2c3d4e5.md"
   }
 }
 ```
