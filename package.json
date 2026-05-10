@@ -1,0 +1,35 @@
+{
+  "name": "hackthon-textbook-agent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node src/backend/app/server.mjs",
+    "preparse:sample": "node src/backend/domain/preParseTextbook2JSON/index.mjs origin-textbooks/03_生理学.pdf data/preParseTextbook2JSON-03_生理学.json book_03",
+    "parse-entity:sample": "node src/backend/domain/parseEntityInTextbookJSON2VisualNode/index.mjs --sample",
+    "rag:sample": "node src/backend/domain/RAG/index.mjs --sample",
+    "frontend:smoke": "node --test tests/frontend.test.mjs",
+    "test": "node --test tests/**/*.test.mjs"
+  },
+  "dependencies": {
+    "@langchain/core": "^0.3.79",
+    "@langchain/openai": "^0.5.18",
+    "@langchain/textsplitters": "^0.1.0",
+    "cytoscape": "^3.33.3",
+    "echarts": "^6.0.0",
+    "express": "^5.1.0",
+    "langchain": "^0.3.36",
+    "mammoth": "^1.12.0",
+    "openai": "^5.23.1",
+    "pdfjs-dist": "^5.7.284",
+    "vectra": "^0.14.0",
+    "xlsx": "^0.18.5"
+  },
+  "devDependencies": {
+    "docx": "^9.6.1",
+    "pdfkit": "^0.18.0"
+  }
+}
