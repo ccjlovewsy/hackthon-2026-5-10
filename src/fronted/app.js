@@ -217,7 +217,7 @@ async function buildKnowledgeGraph(textbookId) {
   }
   try {
     const { textbook } = await api(`/api/frontend/textbooks/${encodeURIComponent(id)}`);
-    const graph = await api("/api/parseEntityInTextbookJSON2VisualNode/parseEntityInTextbookJSON2VisualNode", {
+    const job = await api("/api/parseEntityInTextbookJSON2VisualNode/jobs", {
       method: "POST",
       body: JSON.stringify({
         llmId: state.chatLlmId,
@@ -226,17 +226,39 @@ async function buildKnowledgeGraph(textbookId) {
         maxChapterChars: 9000
       })
     });
-    await api("/api/parseEntityInTextbookJSON2VisualNode/exportVisualNodeGraph2DataJSON", {
-      method: "POST",
-      body: JSON.stringify({})
-    });
+    const graph = await waitForGraphJob(job.job_id, button);
     await refreshGraph("source");
-    toast(`图谱抽取完成：${graph.stats?.node_count ?? graph.nodes?.length ?? 0} 个节点`);
+    toast(`图谱抽取完成：${graph.stats?.node_count ?? 0} 个节点`);
   } finally {
     if (button) {
       button.disabled = false;
       button.textContent = originalText;
     }
+  }
+}
+
+async function waitForGraphJob(jobId, button) {
+  if (!jobId) throw new Error("图谱抽取任务启动失败");
+  let delay = 1800;
+  while (true) {
+    await new Promise((resolve) => window.setTimeout(resolve, delay));
+    const job = await api(`/api/parseEntityInTextbookJSON2VisualNode/jobs/${encodeURIComponent(jobId)}`);
+    const completed = job.progress?.completed_chapters ?? 0;
+    const total = job.progress?.chapter_count ?? 0;
+    const chapter = job.progress?.current_chapter?.title;
+    if (button && total > 0) {
+      button.textContent = `${completed}/${total}`;
+    }
+    if (job.status === "completed") {
+      return job.graph ?? {};
+    }
+    if (job.status === "failed") {
+      throw new Error(job.error?.message || "图谱抽取失败");
+    }
+    if (chapter) {
+      toast(`图谱抽取中：${completed}/${total} · ${chapter}`);
+    }
+    delay = Math.min(5000, Math.round(delay * 1.2));
   }
 }
 

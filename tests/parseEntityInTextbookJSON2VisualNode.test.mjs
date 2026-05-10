@@ -408,3 +408,73 @@ test("HTTP API exposes parse and export endpoints with registered LLM", async ()
     }
   });
 });
+
+test("HTTP API can run graph extraction as a background job", async () => {
+  await withTempDir(async (dataDir) => {
+    const provider = await startMockLLMProvider();
+    const registry = new Map();
+    const app = express();
+    app.use(express.json({ limit: "10mb" }));
+    app.use("/test-llm", createLLMRouter({ registry }));
+    app.use(
+      "/test-parseEntityInTextbookJSON2VisualNode",
+      createParseEntityInTextbookJSON2VisualNodeRouter({ registry, dataDir })
+    );
+    app.use((error, _req, res, _next) => {
+      res.status(500).json({ error: error.name, message: error.message });
+    });
+    const appServer = app.listen(0, "127.0.0.1");
+    await once(appServer, "listening");
+    const appAddress = appServer.address();
+    const apiBase = `http://127.0.0.1:${appAddress.port}`;
+
+    try {
+      const configResponse = await fetch(`${apiBase}/test-llm/configLLM`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          endpoint: provider.url,
+          apiKey: "sk-local-test",
+          defaultModel: "test-chat-model"
+        })
+      });
+      const configJson = await configResponse.json();
+
+      const startResponse = await fetch(`${apiBase}/test-parseEntityInTextbookJSON2VisualNode/jobs`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          llmId: configJson.llm.id,
+          textbookJSON: sampleTextbookJSON(),
+          maxNodesPerChapter: 6
+        })
+      });
+      assert.equal(startResponse.status, 202);
+      const startedJob = await startResponse.json();
+      assert.equal(startedJob.status, "queued");
+      assert.equal(startedJob.progress.chapter_count, 2);
+
+      let job = startedJob;
+      for (let attempt = 0; attempt < 30 && job.status !== "completed"; attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 25));
+        const jobResponse = await fetch(
+          `${apiBase}/test-parseEntityInTextbookJSON2VisualNode/jobs/${startedJob.job_id}`
+        );
+        assert.equal(jobResponse.status, 200);
+        job = await jobResponse.json();
+        assert.notEqual(job.status, "failed", job.error?.message);
+      }
+
+      assert.equal(job.status, "completed");
+      assert.equal(job.progress.completed_chapters, 2);
+      assert.ok(job.graph.stats.node_count >= 5);
+      assert.ok(job.export.nodePath.endsWith("book_test.nodes.json"));
+      assert.equal(provider.calls.length, 2);
+      await fs.access(path.join(dataDir, "node", "book_test.nodes.json"));
+      await fs.access(path.join(dataDir, "side", "book_test.sides.json"));
+    } finally {
+      await closeServer(appServer);
+      await closeServer(provider.server);
+    }
+  });
+});

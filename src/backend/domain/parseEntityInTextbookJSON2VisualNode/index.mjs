@@ -179,6 +179,8 @@ function normalizeParseArguments(input, maybeOptions = {}) {
     maxChapters: raw.maxChapters ? coercePositiveInteger(raw.maxChapters, textbookJSON.chapters.length) : null,
     includeChapterTopicNodes: raw.includeChapterTopicNodes !== false,
     ensureRelationCoverage: raw.ensureRelationCoverage !== false,
+    onChapterStart: typeof raw.onChapterStart === "function" ? raw.onChapterStart : null,
+    onChapterComplete: typeof raw.onChapterComplete === "function" ? raw.onChapterComplete : null,
     llmOptions: raw.llmOptions && typeof raw.llmOptions === "object" ? raw.llmOptions : {}
   };
 }
@@ -650,16 +652,19 @@ export async function parseEntityInTextbookJSON2VisualNode(input, maybeOptions =
   const chapterReports = [];
 
   for (const [chapterIndex, chapter] of chapters.entries()) {
+    args.onChapterStart?.({ chapter, chapterIndex, chapterCount: chapters.length });
     const content = normalizeText(chapter?.content ?? "");
     if (!content) {
-      chapterReports.push({
+      const report = {
         chapter_id: chapter?.chapter_id ?? "",
         title: chapter?.title ?? "",
         node_count: 0,
         relationship_count: 0,
         skipped: true,
         reason: "empty content"
-      });
+      };
+      chapterReports.push(report);
+      args.onChapterComplete?.({ chapter, chapterIndex, chapterCount: chapters.length, report });
       continue;
     }
 
@@ -691,7 +696,7 @@ export async function parseEntityInTextbookJSON2VisualNode(input, maybeOptions =
       addDerivedCoverageRelationships(builder, chapter, contentNodes, topicNode);
     }
 
-    chapterReports.push({
+    const report = {
       chapter_id: chapter?.chapter_id ?? "",
       title: chapter?.title ?? "",
       page_start: chapter?.page_start ?? null,
@@ -701,7 +706,9 @@ export async function parseEntityInTextbookJSON2VisualNode(input, maybeOptions =
       visual_relationship_count: builder.relationships.filter((relationship) => relationship.chapter_id === (chapter?.chapter_id ?? "")).length,
       derived_relationship_count: builder.relationships.filter((relationship) => relationship.chapter_id === (chapter?.chapter_id ?? "") && (relationship.derived || relationship.fact_eligible === false)).length,
       truncated_for_llm: content.length > args.maxChapterChars
-    });
+    };
+    chapterReports.push(report);
+    args.onChapterComplete?.({ chapter, chapterIndex, chapterCount: chapters.length, report });
   }
 
   const now = new Date().toISOString();

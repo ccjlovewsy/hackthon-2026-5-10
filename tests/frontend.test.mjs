@@ -273,6 +273,8 @@ test("knowledge graph rendering is isolated from the page controller", async () 
   const html = await fs.readFile(path.resolve("src/fronted/index.html"), "utf8");
 
   assert.match(appScript, /createKnowledgeGraphView/);
+  assert.match(appScript, /\/api\/parseEntityInTextbookJSON2VisualNode\/jobs/);
+  assert.match(appScript, /waitForGraphJob/);
   assert.doesNotMatch(appScript, /selector:\s*"node"|cytoscape\(\{/);
   assert.match(graphModule, /selector:\s*"node"/);
   assert.match(graphModule, /label:\s*"data\(label\)"/);
