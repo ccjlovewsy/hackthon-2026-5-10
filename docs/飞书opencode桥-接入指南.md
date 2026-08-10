@@ -156,13 +156,37 @@ opencode 需要写文件时，机器人会先发一条**审批消息**给你：
 
 ## 五、日常使用
 
+桥已通过 **launchd 常驻**（2026-08-10 配置）：登录 macOS 自动启动、崩溃自动拉起（KeepAlive，已实测 kill 后 10 秒内自动重启），无需保持终端开着。
+
+plist 文件：`~/Library/LaunchAgents/com.hackthon.feishu-opencode-bridge.plist`
+
 | 动作 | 命令/操作 |
 | --- | --- |
-| 启动桥 | `npm run bot:feishu`（在 hackthon-2026-5-10 目录） |
-| 改工作目录 | 改 `.env` 的 `OPENCODE_DIR` 后重启 |
-| 多授权一人 | `OPENCODE_ALLOWED_USERS=ou_aaa,ou_bbb`（逗号分隔）后重启 |
+| 查看运行状态 | `launchctl print gui/$(id -u)/com.hackthon.feishu-opencode-bridge \| head -5` |
+| 手动启动/停止 | `launchctl kickstart gui/$(id -u)/com.hackthon.feishu-opencode-bridge`（重启）/ `launchctl kill SIGTERM gui/$(id -u)/com.hackthon.feishu-opencode-bridge` |
+| 彻底停用常驻 | `launchctl bootout gui/$(id -u)/com.hackthon.feishu-opencode-bridge`（重新启用用 `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.hackthon.feishu-opencode-bridge.plist`） |
+| 看日志 | `tail -f data/opencode-logs/feishu-bot.launchd.log`（stderr 在同目录 `.err.log`） |
+| 临时手动跑（调试用） | 先 `bootout` 停掉常驻，再 `npm run bot:feishu`（避免两个进程抢长连接事件） |
+| 改工作目录 | 改 `.env` 的 `OPENCODE_DIR` 后 `kickstart` 重启 |
+| 多授权一人 | `OPENCODE_ALLOWED_USERS=ou_aaa,ou_bbb`（逗号分隔）后 `kickstart` 重启 |
 | 限制单条执行时长 | `.env` 加 `OPENCODE_TIMEOUT_MS=600000`（10 分钟，到点 kill） |
-| 清空会话记忆 | 删除 `data/feishu-sessions.json` 后重启（下次从新会话开始） |
+| 清空会话记忆 | 删除 `data/feishu-sessions.json` 后 `kickstart` 重启（下次从新会话开始） |
+
+> ⚠️ plist 里 node 路径写死为 `~/.nvm/versions/node/v24.14.1/bin/node`；如果以后用 nvm 升级/切换了 Node 版本，需要同步修改 plist 里的 `ProgramArguments` 和 `PATH`。
+
+### 常驻功耗（2026-08-10 实测）
+
+空闲稳态采样（`top -l 2`）：
+
+| 进程 | CPU | 内存 | 说明 |
+| --- | --- | --- | --- |
+| `feishuBot.mjs`（桥） | 0.0% | ~54 MB | 挂在飞书 WebSocket 长连接上，事件驱动，无轮询 |
+| `opencode serve` | 0.0~1.3% | ~360 MB | HTTP 监听 127.0.0.1:41234，无请求时 idle |
+
+- **launchd 本身零功耗**：plist 只是配置，KeepAlive 是进程退出时的内核事件通知，不产生定时唤醒。
+- **空闲功耗已近理论最低，无需再加守护/降功耗进程**——任何 watchdog 自己也要运行和唤醒，属于负优化；macOS 的 App Nap 还会自动压制无活动后台进程。
+- 实际耗电只发生在飞书发指令、opencode 执行 LLM/工具期间，与手动跑桥的开销相同。
+- **不建议为省 360 MB 内存改为"用时再启动 serve"**：opencode 冷启动需加载 36+ 插件，首条指令可能挂几分钟（见进度文档"踩过的坑"第 2 条），会破坏随时聊天的体验。常驻保温是合理取舍。
 
 ---
 

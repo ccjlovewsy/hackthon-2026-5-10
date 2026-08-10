@@ -70,6 +70,20 @@ npm run rag:sample
 npm test
 ```
 
+## 测试
+
+`npm test` 运行全部回归（`node --test tests/**/*.test.mjs`），当前共 50 项用例，全部通过。按模块分布：
+
+| 测试文件 | 用例数 | 覆盖内容 |
+| --- | --- | --- |
+| `tests/preParseTextbook2JSON.test.mjs` | 10 | MD/TXT/PDF/DOCX/XLSX/URL 多格式解析、PDF 流式读取、真实中文教材、HTTP API、非法格式拒绝 |
+| `tests/parseEntityInTextbookJSON2VisualNode.test.mjs` | 4 | 图谱 JSON 构建与快照、前端 node/side 导出、HTTP API、后台任务 |
+| `tests/NodesDeduplicationAndAlignment.test.mjs` | 9 | 合并/保留/删除决策、necessity gate 校验、教师反馈、前后对比数据、HTTP API |
+| `tests/rag.test.mjs` | 7 | 知识库构建、top-5 检索与引用、引用自动补齐/剔除、embedding 凭证、HTTP API |
+| `tests/llm.test.mjs` | 4 | LLM 注册（不泄漏 apiKey）、参数校验、OpenAI 兼容调用、HTTP API |
+| `tests/frontend.test.mjs` | 7 | 去重交互、图谱布局、四视图洞察、防抖、前端辅助 API |
+| `tests/feishuBot.test.mjs` | 9 | 飞书消息提取（单聊/群聊）、用户白名单、消息判重、审批回复解析与格式化 |
+
 ## 文档入口
 
 - [需求分析](docs/需求分析.md)
