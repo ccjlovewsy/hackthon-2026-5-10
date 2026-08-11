@@ -12,6 +12,7 @@
 import { spawn } from "node:child_process";
 import { appendFileSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { fetchWithRetry } from "./fetchWithRetry.mjs";
 
 // ---------- 纯函数 ----------
 
@@ -157,7 +158,7 @@ export function createOpenCodeServer(opts) {
 
   async function healthOk() {
     try {
-      const r = await fetch(`${base}/global/health`);
+      const r = await fetchWithRetry(`${base}/global/health`, { timeoutMs: 2000, retries: 0 });
       return r.ok;
     } catch {
       return false;
@@ -191,7 +192,11 @@ export function createOpenCodeServer(opts) {
     while (true) {
       try {
         eventCtrl = new AbortController();
-        const res = await fetch(`${base}/event`, { signal: eventCtrl.signal });
+        const res = await fetchWithRetry(`${base}/event`, {
+          signal: eventCtrl.signal,
+          timeoutMs: 0,
+          retries: 0,
+        });
         if (!res.ok || !res.body) throw new Error(`SSE ${res.status}`);
         const reader = res.body.getReader();
         const decoder = new TextDecoder();
@@ -241,10 +246,12 @@ export function createOpenCodeServer(opts) {
 
   /** 创建会话（等实例就绪：POST 后轮询 GET 确认，避免 serve 刚启动时 404）。 */
   async function createSession() {
-    const r = await fetch(`${base}/session`, {
+    const r = await fetchWithRetry(`${base}/session`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ title: "feishu-bridge" }),
+      timeoutMs: 5000,
+      retries: 1,
     });
     const j = await r.json();
     if (!r.ok || !j.id) throw new Error(`创建会话失败: ${JSON.stringify(j)}`);
@@ -252,7 +259,7 @@ export function createOpenCodeServer(opts) {
     const deadline = Date.now() + 10000;
     while (Date.now() < deadline) {
       try {
-        const chk = await fetch(`${base}/session/${j.id}`);
+        const chk = await fetchWithRetry(`${base}/session/${j.id}`, { timeoutMs: 3000, retries: 1 });
         if (chk.ok) return j.id;
       } catch {
         /* 重试 */
@@ -264,10 +271,12 @@ export function createOpenCodeServer(opts) {
 
   /** 发送指令并轮询等待执行完成，返回 assistant 最终文本。 */
   async function sendMessage(sessionID, text, { timeoutMs = 45 * 60 * 1000 } = {}) {
-    const r = await fetch(`${base}/session/${sessionID}/message`, {
+    const r = await fetchWithRetry(`${base}/session/${sessionID}/message`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ parts: [{ type: "text", text }] }),
+      timeoutMs: 5000,
+      retries: 1,
     });
     if (!r.ok) throw new Error(`发送指令失败: ${r.status} ${(await r.text()).slice(0, 300)}`);
     const j = await r.json();
@@ -276,7 +285,7 @@ export function createOpenCodeServer(opts) {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
       try {
-        const mr = await fetch(`${base}/session/${sessionID}/message`);
+        const mr = await fetchWithRetry(`${base}/session/${sessionID}/message`, { timeoutMs: 5000, retries: 1 });
         if (mr.ok) {
           const list = await mr.json();
           const messages = Array.isArray(list) ? list : list?.data ?? [];
@@ -300,10 +309,12 @@ export function createOpenCodeServer(opts) {
 
   /** 回复权限请求。 */
   async function replyPermission(requestID, reply) {
-    const r = await fetch(`${base}/permission/${requestID}/reply`, {
+    const r = await fetchWithRetry(`${base}/permission/${requestID}/reply`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ reply }),
+      timeoutMs: 5000,
+      retries: 1,
     });
     if (!r.ok) throw new Error(`权限回复失败: ${r.status} ${(await r.text()).slice(0, 300)}`);
   }
