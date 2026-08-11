@@ -90,6 +90,18 @@ export function isDuplicateMessage(messageId) {
 }
 
 /**
+ * 检测错误是否是"会话不存在"(404)。
+ * serve 重启 / sessions 文件损坏 / sessionID 过期都会触发。
+ * 必须带 session 上下文,避免飞书侧 "chat not found" 等错误被误判为会话失效。
+ */
+export function isSessionNotFound(err) {
+  if (!err) return false;
+  if (err.statusCode === 404 || err.status === 404) return true;
+  const msg = String(err.message ?? err);
+  return /session/i.test(msg) && /404|not found/i.test(msg);
+}
+
+/**
  * 解析用户的确认回复文本。
  * 支持：允许/同意/yes → once；拒绝/不同意/no → reject；总是允许/always → always；
  * 以及带编号的「允许 2」「拒绝 #3」形式（多 pending 请求时指定第几个）。
@@ -498,7 +510,22 @@ export function createFeishuBotCore(opts) {
         sessionChat.set(sessionID, chatId);
         log(`执行 (session ${sessionID}): ${JSON.stringify(text)}`);
 
-        const outText = await server.sendMessage(sessionID, text);
+        let outText;
+        try {
+          outText = await server.sendMessage(sessionID, text);
+        } catch (err) {
+          if (!isSessionNotFound(err)) throw err;
+          log(`会话 ${sessionID} 已失效,重建: ${err?.message ?? err}`);
+          delete sessionMap[chatId];
+          saveSessionMap(sessionFile, sessionMap);
+          sessionChat.delete(sessionID);
+          sessionID = await server.createSession();
+          metrics.sessionsCreated++;
+          sessionMap[chatId] = sessionID;
+          saveSessionMap(sessionFile, sessionMap);
+          sessionChat.set(sessionID, chatId);
+          outText = await server.sendMessage(sessionID, text); // 重建后重发一次;再失败直接抛
+        }
         const replyText = outText.trim() || "(无输出)";
         const finalText = replyText.length > 4000 ? `${replyText.slice(0, 4000)}\n…(已截断)` : replyText;
         await reply?.(chatId, finalText);

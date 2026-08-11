@@ -7,6 +7,8 @@ import {
   isDuplicateMessage,
   parseApprovalReply,
   formatPermissionAsk,
+  isSessionNotFound,
+  createFeishuBotCore,
 } from "../src/feishuBotCore.mjs";
 
 test("extractMessageText: 单聊文本", () => {
@@ -92,4 +94,64 @@ test("formatPermissionAsk: diff 超长截断", () => {
     1
   );
   assert.match(text, /已截断/);
+});
+
+test("isSessionNotFound: 检测 404 / not found", () => {
+  assert.equal(isSessionNotFound({ statusCode: 404, message: "x" }), true);
+  assert.equal(isSessionNotFound({ status: 404, message: "x" }), true);
+  assert.equal(isSessionNotFound(new Error("session not found: 404")), true);
+  assert.equal(isSessionNotFound(new Error("not found")), false);
+  assert.equal(isSessionNotFound(new Error("chat not found")), false); // 飞书侧错误不误判
+  assert.equal(isSessionNotFound(new Error("boom")), false);
+  assert.equal(isSessionNotFound(null), false);
+});
+
+test("handleMessage: sessionID 失效(404)自动重建会话", async () => {
+  const fs = await import("node:fs");
+  const sessionFile = "/tmp/test-sessions-failover.json";
+  fs.rmSync(sessionFile, { force: true });
+
+  let createCalls = 0;
+  const sessions = ["ses_old", "ses_new"];
+  const fakeServer = {
+    onPermissionAsked: null,
+    createSession: async () => sessions[createCalls++],
+    sendMessage: async (sessionID) => {
+      if (sessionID === "ses_old") {
+        const err = new Error("session not found: 404");
+        err.statusCode = 404;
+        throw err;
+      }
+      return "ok from new session";
+    },
+    replyPermission: async () => {},
+  };
+  const replies = [];
+  const core = createFeishuBotCore({
+    server: fakeServer,
+    allowedUsers: ["ou_me"],
+    sessionFile,
+    reply: (chatId, text) => replies.push(text),
+    sendPermissionAsk: () => {},
+    log: () => {},
+  });
+
+  // 预置失效的 sessionID
+  fs.writeFileSync(sessionFile, JSON.stringify({ oc_test: "ses_old" }));
+
+  await core.handleMessage({
+    message: {
+      message_id: "om_1",
+      chat_id: "oc_test",
+      content: JSON.stringify({ text: "继续干活" }),
+      chat_type: "p2p",
+    },
+    sender: { sender_id: { open_id: "ou_me" } },
+  });
+
+  assert.equal(replies.length, 1);
+  assert.match(replies[0], /ok from new session/);
+  const updated = JSON.parse(fs.readFileSync(sessionFile, "utf8"));
+  assert.equal(updated.oc_test, "ses_new");
+  fs.rmSync(sessionFile, { force: true });
 });
