@@ -2,6 +2,7 @@ import "dotenv/config";
 import lark from "@larksuiteoapi/node-sdk";
 import { createServer } from "node:http";
 import { createFeishuBotCore, createOpenCodeServer, parseAllowedUsers } from "./feishuBotCore.mjs";
+import { setupGlobalErrorHandler } from "./globalErrorHandler.mjs";
 
 /**
  * 飞书机器人 → opencode 桥（独立进程）。
@@ -15,6 +16,7 @@ import { createFeishuBotCore, createOpenCodeServer, parseAllowedUsers } from "./
 
 // 入口守卫：仅作为脚本直接运行时启动；被 import（如单测）时无副作用
 if (import.meta.url === `file://${process.argv[1]}`) {
+  setupGlobalErrorHandler();
   const APP_ID = process.env.FEISHU_APP_ID;
   const APP_SECRET = process.env.FEISHU_APP_SECRET;
   const OPENCODE_DIR = process.env.OPENCODE_DIR || process.cwd();
