@@ -7,11 +7,13 @@
  */
 export function setupGlobalErrorHandler(onFatal) {
   const log = onFatal ?? ((msg, err) => console.error(`[feishuBot][FATAL] ${msg}`, err ?? ""));
+  // 吞掉未捕获异常是"防崩溃"策略,但编程错误不能静默化:stack 必须完整落日志,便于事后定位
+  const stackOf = (e) => (e instanceof Error && e.stack ? `\n${e.stack}` : "");
   process.on("uncaughtException", (err) => {
-    log("uncaughtException", err);
+    log(`uncaughtException${stackOf(err)}`, err);
     log("进程不退出,继续运行(若行为异常请手动重启)");
   });
   process.on("unhandledRejection", (reason) => {
-    log("unhandledRejection", reason);
+    log(`unhandledRejection${stackOf(reason)}`, reason);
   });
 }

@@ -30,7 +30,15 @@ export function createHealthServer({ core, port }) {
     res.end("not found");
   });
   return {
-    listen: (cb) => server.listen(port, "127.0.0.1", cb),
+    /**
+     * @param {() => void} [cb] 监听成功回调
+     * @param {(err: Error) => void} [onError] 监听失败回调(如 EADDRINUSE);
+     *   不传时 error 事件会抛到 uncaughtException,被全局错误处理器吞掉导致端点静默不可用
+     */
+    listen: (cb, onError) => {
+      if (onError) server.on("error", onError);
+      server.listen(port, "127.0.0.1", cb);
+    },
     close: () => server.close(),
     address: () => server.address(),
   };

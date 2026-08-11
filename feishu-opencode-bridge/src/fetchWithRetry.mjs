@@ -5,7 +5,7 @@
  * - 4xx 不重试(业务错误,重试无用)
  * - timeoutMs: 0 表示不设超时(供 SSE 长连接用)
  * - 若调用方传 signal 并主动 abort,立即传播不重试(非瞬时错误)
- * - 通过 AbortSignal.any 联动外部 signal 与内部 ctrl,避免监听器累积
+ * - 外部 signal 的监听器每次调用注册、结束即移除,重连循环中不累积
  */
 const DEFAULT_TIMEOUT_MS = 10_000;
 const DEFAULT_RETRIES = 2;
@@ -19,23 +19,25 @@ export async function fetchWithRetry(url, options = {}) {
     ...fetchOpts
   } = options;
 
+  // 外部 signal 手动管理监听器:每次调用注册/结束时移除,避免重连循环里
+  // 反复创建 AbortSignal.any 组合 signal 导致监听器在外部 signal 上累积
+  const externalSignal = fetchOpts.signal;
+  delete fetchOpts.signal;
+
   let lastErr;
   for (let attempt = 0; attempt <= retries; attempt++) {
     const ctrl = new AbortController();
-    // 若调用方 signal 已 abort,立即同步 abort 内部 ctrl
-    if (fetchOpts.signal?.aborted) {
-      ctrl.abort();
-    }
-    // 用 AbortSignal.any 联动外部 signal 与内部 ctrl(避免监听器累积)
-    const combinedSignal = fetchOpts.signal
-      ? AbortSignal.any([fetchOpts.signal, ctrl.signal])
-      : ctrl.signal;
+    if (externalSignal?.aborted) ctrl.abort();
+    const onAbort = externalSignal ? () => ctrl.abort() : null;
+    if (onAbort) externalSignal.addEventListener("abort", onAbort, { once: true });
     const timer = timeoutMs > 0 ? setTimeout(() => ctrl.abort(), timeoutMs) : null;
     try {
-      const res = await fetch(url, { ...fetchOpts, signal: combinedSignal });
+      const res = await fetch(url, { ...fetchOpts, signal: ctrl.signal });
       if (timer) clearTimeout(timer);
       if (res.status >= 500) {
         if (attempt < retries) {
+          // 消费/取消响应体,释放 undici 连接,避免重试期间连接池滞留
+          await res.body?.cancel().catch(() => {});
           await sleep(retryDelayMs * Math.pow(2, attempt));
           continue;
         }
@@ -46,13 +48,15 @@ export async function fetchWithRetry(url, options = {}) {
       if (timer) clearTimeout(timer);
       lastErr = err;
       // 调用方主动 abort 不是瞬时错误,立即传播,不重试
-      if (fetchOpts.signal?.aborted) {
+      if (externalSignal?.aborted) {
         throw err;
       }
       if (attempt < retries) {
         await sleep(retryDelayMs * Math.pow(2, attempt));
         continue;
       }
+    } finally {
+      if (onAbort) externalSignal.removeEventListener("abort", onAbort);
     }
   }
   throw lastErr ?? new Error("fetchWithRetry: exhausted retries");

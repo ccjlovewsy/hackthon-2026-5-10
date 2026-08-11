@@ -338,3 +338,126 @@ test("handleMessage: 轮询 404(pollPhase)只重建不重发", async () => {
   assert.equal(updated.oc_test, "ses_new_1");
   fs.rmSync(sessionFile, { force: true });
 });
+
+test("sendMessage: 长工具调用中(parts 含 tool)idle 不触发,不把中间文本当结果", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url, opts) => {
+    if (url.endsWith("/message") && opts?.method === "POST") {
+      return new Response(JSON.stringify({ info: { id: "asst_1" } }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    if (url.endsWith("/message")) {
+      // 模拟:assistant 说了句"开始处理"后进入长工具调用,parts 含 tool 且长时间无变化
+      return new Response(
+        JSON.stringify([
+          {
+            info: { id: "asst_1" },
+            parts: [
+              { type: "text", text: "开始处理" },
+              { type: "tool", tool: "bash", state: "running" },
+            ],
+          },
+        ]),
+        { status: 200, headers: { "content-type": "application/json" } }
+      );
+    }
+    return new Response("ok", { status: 200 });
+  };
+  try {
+    const server = createOpenCodeServer({ cmd: "fake", port: 99995 });
+    const start = Date.now();
+    const text = await server.sendMessage("ses_x", "hi", { idleMs: 100, pollMs: 50, timeoutMs: 800 });
+    const elapsed = Date.now() - start;
+    // idle 被 tool part 阻止,最终走超时而不是返回半截文本"开始处理"
+    assert.match(text, /\[超时\]/);
+    assert.ok(elapsed >= 700, `should wait until timeout, got ${elapsed}ms`);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("handleMessage: /kill 后旧任务 404 自愈不再写回 sessionMap(代次校验)", async () => {
+  const fs = await import("node:fs");
+  const sessionFile = "/tmp/test-sessions-killrace.json";
+  fs.rmSync(sessionFile, { force: true });
+  fs.writeFileSync(sessionFile, JSON.stringify({ oc_test: "ses_old" }));
+
+  let createCalls = 0;
+  let resolveSend;
+  const sendGate = new Promise((r) => (resolveSend = r));
+  const fakeServer = {
+    onPermissionAsked: null,
+    createSession: async () => `ses_new_${++createCalls}`,
+    sendMessage: async () => {
+      await sendGate; // 任务 A 在 sendMessage 中挂起,等待 /kill 介入
+      const err = new Error("session not found: 404");
+      err.statusCode = 404;
+      throw err;
+    },
+    replyPermission: async () => {},
+  };
+  const replies = [];
+  const core = createFeishuBotCore({
+    server: fakeServer,
+    allowedUsers: ["ou_me"],
+    sessionFile,
+    reply: (chatId, text) => replies.push(text),
+    sendPermissionAsk: () => {},
+    log: () => {},
+  });
+
+  // 任务 A:进入 sendMessage 后挂起
+  const taskA = core.handleMessage({
+    message: { message_id: "om_race_a", chat_id: "oc_test", content: JSON.stringify({ text: "跑长任务" }), chat_type: "p2p" },
+    sender: { sender_id: { open_id: "ou_me" } },
+  });
+  await new Promise((r) => setTimeout(r, 20)); // 等任务 A 挂到 sendMessage
+
+  // /kill 介入:代次 +1,清除 sessionMap
+  await core.handleMessage({
+    message: { message_id: "om_race_kill", chat_id: "oc_test", content: JSON.stringify({ text: "/kill" }), chat_type: "p2p" },
+    sender: { sender_id: { open_id: "ou_me" } },
+  });
+  assert.equal(JSON.parse(fs.readFileSync(sessionFile, "utf8")).oc_test, undefined, "kill 已清除映射");
+
+  // 任务 A 的 sendMessage 此刻 404 → 自愈代次校验失败,不得写回
+  resolveSend();
+  await assert.rejects(taskA);
+
+  const after = JSON.parse(fs.readFileSync(sessionFile, "utf8"));
+  assert.equal(after.oc_test, undefined, "旧任务不得把新 session 写回已被 kill 的映射");
+  fs.rmSync(sessionFile, { force: true });
+});
+
+test("close: 停止 SSE 重连循环", async () => {
+  const originalFetch = globalThis.fetch;
+  let fetchCalls = 0;
+  globalThis.fetch = async (url, opts) => {
+    fetchCalls++;
+    // SSE 流:挂起直到 signal abort(模拟长连接)
+    return new Response(
+      new ReadableStream({
+        start(controller) {
+          opts.signal?.addEventListener("abort", () => controller.error(new DOMException("aborted", "AbortError")));
+        },
+      }),
+      { status: 200 }
+    );
+  };
+  try {
+    const server = createOpenCodeServer({ cmd: "fake", port: 99994 });
+    server.startEventLoop();
+    await new Promise((r) => setTimeout(r, 50));
+    assert.ok(fetchCalls >= 1, "startEventLoop 应发起 SSE 连接");
+
+    server.close();
+    await new Promise((r) => setTimeout(r, 100));
+    const callsAfterClose = fetchCalls;
+    await new Promise((r) => setTimeout(r, 3500)); // 超过重连间隔 3s
+    assert.equal(fetchCalls, callsAfterClose, "close 后不应再重连");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});

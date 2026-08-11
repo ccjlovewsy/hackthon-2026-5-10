@@ -65,3 +65,25 @@ test("createHealthServer: 非 GET 405", async () => {
     server.close();
   }
 });
+
+test("createHealthServer: listen 端口冲突时 onError 被调用(不被静默吞掉)", async () => {
+  const fakeCore = { getChatIds: () => [], getMetrics: () => ({}) };
+  const a = createHealthServer({ core: fakeCore, port: 0 });
+  await new Promise((r) => a.listen(r));
+  const port = a.address().port;
+  try {
+    const b = createHealthServer({ core: fakeCore, port });
+    const errors = [];
+    await new Promise((r) => {
+      b.listen(r, (err) => {
+        errors.push(err);
+        r();
+      });
+    });
+    assert.equal(errors.length, 1, "端口冲突应触发 onError");
+    const desc = String(errors[0]?.code ?? errors[0]?.message ?? errors[0]);
+    assert.match(desc, /EADDRINUSE/);
+  } finally {
+    a.close();
+  }
+});

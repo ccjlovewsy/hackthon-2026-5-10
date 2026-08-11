@@ -169,6 +169,7 @@ export function createOpenCodeServer(opts) {
   const base = `http://127.0.0.1:${port}`;
   let child = null;
   let eventCtrl = null;
+  let stopped = false;
 
   async function healthOk() {
     try {
@@ -201,9 +202,9 @@ export function createOpenCodeServer(opts) {
     log("serve 就绪");
   }
 
-  /** 订阅 SSE 事件流（断线自动重连）。 */
+  /** 订阅 SSE 事件流（断线自动重连；close() 后停止）。 */
   async function startEventLoop() {
-    while (true) {
+    while (!stopped) {
       try {
         eventCtrl = new AbortController();
         const res = await fetchWithRetry(`${base}/event`, {
@@ -236,6 +237,7 @@ export function createOpenCodeServer(opts) {
           }
         }
       } catch (err) {
+        if (stopped) break; // close() 已 abort eventCtrl,不再重连
         log(`SSE 断开: ${err?.message ?? err}，3s 后重连`);
         server.onSseReconnect?.();
         await new Promise((r) => setTimeout(r, 3000));
@@ -338,12 +340,17 @@ export function createOpenCodeServer(opts) {
             lastParts = currentText;
             lastChange = Date.now();
           } else if (Date.now() - lastChange >= idleMs && parts.length > 0) {
-            const idleText = parts
-              .filter((p) => p.type === "text")
-              .map((p) => p.text ?? "")
-              .join("\n")
-              .trim();
-            if (idleText) return idleText;
+            // 任务仍在工具执行中(tool/step part 存在)时不触发 idle:
+            // 长工具调用可能几分钟无输出,此时返回会把中间文本当最终结果。
+            // 仅在纯文本阶段(step-finish 丢失的兜底)才允许 idle 判定完成。
+            if (!parts.some((p) => p.type === "tool" || p.type === "step")) {
+              const idleText = parts
+                .filter((p) => p.type === "text")
+                .map((p) => p.text ?? "")
+                .join("\n")
+                .trim();
+              if (idleText) return idleText;
+            }
           }
         }
       } catch (err) {
@@ -369,6 +376,7 @@ export function createOpenCodeServer(opts) {
   }
 
   function close() {
+    stopped = true; // 停掉 startEventLoop 的重连循环,避免 close 后悬挂重连
     eventCtrl?.abort();
     if (child && !child.killed) child.kill("SIGTERM");
   }
@@ -439,6 +447,8 @@ export function createFeishuBotCore(opts) {
   const sessionMap = loadSessionMap(sessionFile);
   // chat_id → 串行队列，避免同一会话并发写
   const queues = new Map();
+  // chat_id → 代次:/kill 递增,使挂起的旧队列任务自愈时不得再写回会话映射
+  const chatGen = new Map();
   // sessionID → chatId（权限请求需要知道发给哪个飞书会话）
   const sessionChat = new Map();
   // 待审查的权限请求：requestID → { chatId, req, askedAt }
@@ -517,6 +527,8 @@ export function createFeishuBotCore(opts) {
       }
       // 清空该 chatId 的串行队列(挂起的 task 仍在 pending,但新 task 会立即接管)
       queues.delete(chatId);
+      // 代次 +1:旧队列任务若此时触发 404 自愈,代次校验失败,不会把新 sessionID 写回映射
+      chatGen.set(chatId, (chatGen.get(chatId) ?? 0) + 1);
       const killText = `🔪 已强制重置会话${oldSession ? `(原 ${oldSession.slice(0, 8)}…)` : ""}。下次指令将创建新会话。`;
       await reply?.(chatId, killText);
       return killText;
@@ -569,6 +581,7 @@ export function createFeishuBotCore(opts) {
     // 路由 2：新指令
     log(`指令 chat=${chatId}: ${JSON.stringify(text)}`);
     return queued(chatId, async () => {
+      const gen = chatGen.get(chatId) ?? 0; // 记录本任务的代次,自愈写回前校验
       let sessionID = sessionMap[chatId];
       if (!sessionID) {
         sessionID = await server.createSession();
@@ -587,6 +600,11 @@ export function createFeishuBotCore(opts) {
           outText = await server.sendMessage(sessionID, text);
         } catch (err) {
           if (!isSessionNotFound(err)) throw err;
+          if ((chatGen.get(chatId) ?? 0) !== gen) {
+            // /kill 已重置该会话:旧队列任务不得再写回 sessionMap,否则会覆盖 /kill 后新建的会话
+            sessionLog?.append(chatId, `SESSION_INVALID(过期任务,已被 /kill 重置): ${formatErr(err)}`);
+            throw err;
+          }
           sessionLog?.append(chatId, `SESSION_INVALID: ${formatErr(err)}`);
           log(`会话 ${sessionID} 已失效,重建: ${formatErr(err)}`);
           delete sessionMap[chatId];

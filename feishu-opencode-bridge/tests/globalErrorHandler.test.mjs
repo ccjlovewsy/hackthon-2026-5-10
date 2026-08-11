@@ -37,3 +37,24 @@ setTimeout(() => { console.log("PROCESS STILL ALIVE"); process.exit(0); }, 200);
     rmSync(tmpFile, { force: true });
   }
 });
+
+test("setupGlobalErrorHandler: uncaughtException 日志包含完整 stack(不静默化编程错误)", () => {
+  const modUrl = pathToFileURL(new URL("../src/globalErrorHandler.mjs", import.meta.url).pathname).href;
+  const tmpFile = join(tmpdir(), `global-error-handler-stack-test-${process.pid}.mjs`);
+  writeFileSync(tmpFile, `
+import { setupGlobalErrorHandler } from ${JSON.stringify(modUrl)};
+setupGlobalErrorHandler((msg) => {
+  if (msg.includes("boom-marker") && msg.includes("\\n    at ")) console.log("STACK_CAPTURED");
+});
+setTimeout(() => { throw new Error("boom-marker"); }, 10);
+setTimeout(() => { console.log("STILL_ALIVE"); process.exit(0); }, 200);
+`);
+  try {
+    const res = spawnSync(process.execPath, [tmpFile], { encoding: "utf8" });
+    assert.equal(res.status, 0, res.stderr);
+    assert.match(res.stdout, /STACK_CAPTURED/);
+    assert.match(res.stdout, /STILL_ALIVE/);
+  } finally {
+    rmSync(tmpFile, { force: true });
+  }
+});

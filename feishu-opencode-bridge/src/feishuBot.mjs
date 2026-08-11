@@ -134,15 +134,25 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     server.startEventLoop();
     logger.info("feishuBot", `opencode serve 就绪: http://127.0.0.1:${OPENCODE_SERVE_PORT}`);
 
+    // 端口被占用(EADDRINUSE)不能静默:否则进度/健康端点不可用而 /health 仍 200,监控误判
+    const onListenError = (name, port) => (err) => {
+      logger.fatal("feishuBot", `${name} 监听失败 (port ${port})`, err);
+      process.exit(1);
+    };
+
+    progressServer.on("error", onListenError("进度推送端点", PROGRESS_PORT));
     progressServer.listen(PROGRESS_PORT, "127.0.0.1", () => {
       logger.info("feishuBot", `进度推送端点: http://127.0.0.1:${PROGRESS_PORT}/progress`);
     });
 
     const HEALTH_PORT = Number(process.env.FEISHU_HEALTH_PORT || 41236);
     const healthServer = createHealthServer({ core, port: HEALTH_PORT });
-    healthServer.listen(() => {
-      logger.info("feishuBot", `健康端点: http://127.0.0.1:${HEALTH_PORT}/health`);
-    });
+    healthServer.listen(
+      () => {
+        logger.info("feishuBot", `健康端点: http://127.0.0.1:${HEALTH_PORT}/health`);
+      },
+      onListenError("健康端点", HEALTH_PORT)
+    );
 
     const wsClient = new lark.WSClient({
       appId: APP_ID,
