@@ -104,3 +104,64 @@ test("fetchWithRetry: timeoutMs=0 不超时(供 SSE 长连接)", async () => {
     globalThis.fetch = originalFetch;
   }
 });
+
+test("fetchWithRetry: caller-aborted signal propagates immediately, no retry", async () => {
+  let calls = 0;
+  const fakeFetch = async (url, opts) => {
+    calls++;
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => resolve(new Response("ok")), 5000);
+      opts.signal?.addEventListener("abort", () => {
+        clearTimeout(timer);
+        reject(new DOMException("aborted", "AbortError"));
+      });
+    });
+  };
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = fakeFetch;
+  try {
+    const callerCtrl = new AbortController();
+    const promise = fetchWithRetry("http://x", {
+      signal: callerCtrl.signal,
+      timeoutMs: 0, // no internal timeout
+      retries: 3,
+      retryDelayMs: 10,
+    });
+    // Abort after 50ms (during the first fetch)
+    setTimeout(() => callerCtrl.abort(), 50);
+    await assert.rejects(promise, (err) => err.name === "AbortError");
+    assert.equal(calls, 1, "should not retry on caller abort");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("fetchWithRetry: already-aborted signal aborts immediately", async () => {
+  let calls = 0;
+  const fakeFetch = async (url, opts) => {
+    calls++;
+    return new Promise((resolve, reject) => {
+      // 模拟真实 fetch 行为:已 abort 的 signal 立即 reject(addEventListener 不会触发)
+      if (opts.signal?.aborted) {
+        reject(new DOMException("aborted", "AbortError"));
+        return;
+      }
+      opts.signal?.addEventListener("abort", () => {
+        reject(new DOMException("aborted", "AbortError"));
+      });
+    });
+  };
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = fakeFetch;
+  try {
+    const callerCtrl = new AbortController();
+    callerCtrl.abort();
+    await assert.rejects(
+      fetchWithRetry("http://x", { signal: callerCtrl.signal, timeoutMs: 1000, retries: 2 }),
+      (err) => err.name === "AbortError"
+    );
+    assert.equal(calls, 1, "should only call fetch once with already-aborted signal");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
