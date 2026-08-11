@@ -155,3 +155,56 @@ test("handleMessage: sessionID 失效(404)自动重建会话", async () => {
   assert.equal(updated.oc_test, "ses_new");
   fs.rmSync(sessionFile, { force: true });
 });
+
+test("handleMessage: /kill 清除卡死的会话映射", async () => {
+  const fs = await import("node:fs");
+  const sessionFile = "/tmp/test-sessions-kill.json";
+  fs.rmSync(sessionFile, { force: true });
+
+  let createCalls = 0;
+  let resolveStuck; // 捕获 resolve 以便测试结束时让卡死的 promise settle
+  const fakeServer = {
+    onPermissionAsked: null,
+    createSession: async () => `ses_${++createCalls}`,
+    sendMessage: async () => new Promise((resolve) => { resolveStuck = resolve; }), // 模拟卡死
+    replyPermission: async () => {},
+  };
+  const replies = [];
+  const core = createFeishuBotCore({
+    server: fakeServer,
+    allowedUsers: ["ou_me"],
+    sessionFile,
+    reply: (chatId, text) => replies.push(text),
+    sendPermissionAsk: () => {},
+    log: () => {},
+  });
+
+  // 触发卡死指令(不 await,放后台)
+  core.handleMessage({
+    message: { message_id: "om_kill_1", chat_id: "oc_test", content: JSON.stringify({ text: "卡死指令" }), chat_type: "p2p" },
+    sender: { sender_id: { open_id: "ou_me" } },
+  });
+
+  // 给一点时间让 sessionMap 写入
+  await new Promise((r) => setTimeout(r, 100));
+  assert.equal(createCalls, 1);
+  const sessionMapAfterFirst = JSON.parse(fs.readFileSync(sessionFile, "utf8"));
+  assert.equal(sessionMapAfterFirst.oc_test, "ses_1");
+
+  // 用户发 /kill
+  const killReply = await core.handleMessage({
+    message: { message_id: "om_kill_2", chat_id: "oc_test", content: JSON.stringify({ text: "/kill" }), chat_type: "p2p" },
+    sender: { sender_id: { open_id: "ou_me" } },
+  });
+  assert.match(killReply, /已强制重置/);
+
+  // sessionMap 中 oc_test 已删除
+  const sessionMapAfterKill = JSON.parse(fs.readFileSync(sessionFile, "utf8"));
+  assert.equal(sessionMapAfterKill.oc_test, undefined);
+
+  // 清理:让卡死的 promise settle,避免 test runner 报 pending
+  resolveStuck?.("(test cleanup)");
+  await new Promise((r) => setTimeout(r, 50));
+
+  fs.rmSync(sessionFile, { force: true });
+});

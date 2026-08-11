@@ -437,7 +437,7 @@ export function createFeishuBotCore(opts) {
 
   /**
    * 处理一条飞书消息。返回回复文本（或 undefined 表示不回复）。
-   * 两条路由：确认授权回复（允许/拒绝） 或 新指令。
+   * 三条路由：强制重置（/kill） 或 确认授权回复（允许/拒绝） 或 新指令。
    */
   async function handleMessage(data) {
     const { message, sender } = data ?? {};
@@ -465,6 +465,21 @@ export function createFeishuBotCore(opts) {
       const denied = `🚫 未授权：你不在 OPENCODE_ALLOWED_USERS 中。\n你的身份 id：${hint || "(未知)"}\n请管理员加入 .env 后重启。`;
       await reply?.(chatId, denied);
       return denied;
+    }
+
+    // 路由 0：强制重置卡死会话
+    if (text === "/kill" || text === "/reset") {
+      const oldSession = sessionMap[chatId];
+      if (oldSession) {
+        delete sessionMap[chatId];
+        saveSessionMap(sessionFile, sessionMap);
+        sessionChat.delete(oldSession);
+      }
+      // 清空该 chatId 的串行队列(挂起的 task 仍在 pending,但新 task 会立即接管)
+      queues.delete(chatId);
+      const killText = `🔪 已强制重置会话${oldSession ? `(原 ${oldSession.slice(0, 8)}…)` : ""}。下次指令将创建新会话。`;
+      await reply?.(chatId, killText);
+      return killText;
     }
 
     // 路由 1：确认授权回复
