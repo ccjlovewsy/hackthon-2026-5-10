@@ -298,7 +298,11 @@ export function createOpenCodeServer(opts) {
       timeoutMs: 5000,
       retries: 1,
     });
-    if (!r.ok) throw new Error(`发送指令失败: ${r.status} ${(await r.text()).slice(0, 300)}`);
+    if (!r.ok) {
+      const err = new Error(`发送指令失败: ${r.status} ${(await r.text()).slice(0, 300)}`);
+      err.statusCode = r.status; // 挂上状态码,isSessionNotFound 优先按 status===404 判定,不依赖 body 文本
+      throw err;
+    }
     const j = await r.json();
     // assistant 消息 id:POST 返回的 info.id 指向刚生成的 assistant 消息
     const assistantID = j?.info?.id;
@@ -308,6 +312,14 @@ export function createOpenCodeServer(opts) {
     while (Date.now() < deadline) {
       try {
         const mr = await fetchWithRetry(`${base}/session/${sessionID}/message`, { timeoutMs: 5000, retries: 1 });
+        if (mr.status === 404) {
+          // 会话在轮询期间失效:消息已发送但结果取不回来。抛错让外层自愈接管;
+          // pollPhase 标记表明指令可能已执行,自愈时只重建不重发,避免重复执行。
+          const err = new Error(`会话在轮询期间失效: ${mr.status} ${(await mr.text()).slice(0, 300)}`);
+          err.statusCode = 404;
+          err.pollPhase = true;
+          throw err;
+        }
         if (mr.ok) {
           const list = await mr.json();
           const messages = Array.isArray(list) ? list : list?.data ?? [];
@@ -334,8 +346,10 @@ export function createOpenCodeServer(opts) {
             if (idleText) return idleText;
           }
         }
-      } catch {
-        /* 重试 */
+      } catch (err) {
+        // 轮询 404 = 会话失效信号,必须穿透让外层自愈接管,不能当瞬时错误吞掉
+        if (err?.statusCode === 404 || err?.status === 404) throw err;
+        /* 其他失败(网络抖动等)重试 */
       }
       await new Promise((res) => setTimeout(res, pollMs));
     }
@@ -583,7 +597,13 @@ export function createFeishuBotCore(opts) {
           sessionMap[chatId] = sessionID;
           saveSessionMap(sessionFile, sessionMap);
           sessionChat.set(sessionID, chatId);
-          outText = await server.sendMessage(sessionID, text); // 重建后重发一次;再失败直接抛
+          if (err.pollPhase) {
+            // 轮询期间 404:指令可能已执行,重发有重复执行风险,只重建不重发,提示用户确认
+            sessionLog?.append(chatId, "SESSION_INVALID(poll): 指令可能已执行,未自动重发,等待用户确认");
+            outText = "[会话失效] 指令已发送但结果获取失败(会话中途失效),会话已重建;若指令未执行,请重发。";
+          } else {
+            outText = await server.sendMessage(sessionID, text); // 重建后重发一次;再失败直接抛
+          }
         }
       } catch (err) {
         // sendMessage 失败(含自愈重发仍失败)记 ERROR;reply 在 try 外,失败不记 SESSION_INVALID

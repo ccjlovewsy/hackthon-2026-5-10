@@ -251,3 +251,90 @@ test("sendMessage: 无 step-finish 时 idle 兜底返回,不死等到 timeout", 
     globalThis.fetch = originalFetch;
   }
 });
+
+test("sendMessage: POST 404 → 抛错带 statusCode=404,body 不含 session 字样也能判定会话失效", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response("not found", { status: 404 });
+  try {
+    const server = createOpenCodeServer({ cmd: "fake", port: 99997 });
+    await assert.rejects(server.sendMessage("ses_x", "hi"), (err) => {
+      assert.equal(err.statusCode, 404);
+      // 真实 opencode 404 body 是 "Resource not found: <路径>",路径恰好含 session 字样;
+      // 若被网关改写为纯 "not found" 也能靠 statusCode 识别,不再依赖 body 文本
+      assert.equal(isSessionNotFound(err), true);
+      return true;
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("sendMessage: 轮询期间会话 404 → 抛带 statusCode=404 + pollPhase 的错误", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url, opts) => {
+    if (opts?.method === "POST") {
+      return new Response(JSON.stringify({ info: { id: "assistant_1" } }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    return new Response("Resource not found: /tmp/opencode/storage/session/ses_x.json", { status: 404 });
+  };
+  try {
+    const server = createOpenCodeServer({ cmd: "fake", port: 99998 });
+    await assert.rejects(
+      server.sendMessage("ses_x", "hi", { pollMs: 10, timeoutMs: 3000 }),
+      (err) => err.statusCode === 404 && err.pollPhase === true && /会话在轮询期间失效/.test(err.message)
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("handleMessage: 轮询 404(pollPhase)只重建不重发", async () => {
+  const fs = await import("node:fs");
+  const sessionFile = "/tmp/test-sessions-poll404.json";
+  fs.rmSync(sessionFile, { force: true });
+
+  let createCalls = 0;
+  let sendCalls = 0;
+  const fakeServer = {
+    onPermissionAsked: null,
+    createSession: async () => `ses_new_${++createCalls}`,
+    sendMessage: async () => {
+      sendCalls++;
+      const err = new Error("会话在轮询期间失效: 404 Resource not found");
+      err.statusCode = 404;
+      err.pollPhase = true;
+      throw err;
+    },
+    replyPermission: async () => {},
+  };
+  fs.writeFileSync(sessionFile, JSON.stringify({ oc_test: "ses_old" }));
+  const replies = [];
+  const core = createFeishuBotCore({
+    server: fakeServer,
+    allowedUsers: ["ou_me"],
+    sessionFile,
+    reply: (chatId, text) => replies.push(text),
+    sendPermissionAsk: () => {},
+    log: () => {},
+  });
+
+  await core.handleMessage({
+    message: {
+      message_id: "om_poll404",
+      chat_id: "oc_test",
+      content: JSON.stringify({ text: "继续干活" }),
+      chat_type: "p2p",
+    },
+    sender: { sender_id: { open_id: "ou_me" } },
+  });
+
+  assert.equal(sendCalls, 1, "轮询 404 不应自动重发(指令可能已执行)");
+  assert.equal(replies.length, 1);
+  assert.match(replies[0], /\[会话失效\]/);
+  const updated = JSON.parse(fs.readFileSync(sessionFile, "utf8"));
+  assert.equal(updated.oc_test, "ses_new_1");
+  fs.rmSync(sessionFile, { force: true });
+});
