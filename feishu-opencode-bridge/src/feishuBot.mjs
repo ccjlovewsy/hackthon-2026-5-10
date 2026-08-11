@@ -18,10 +18,10 @@ import { createHealthServer } from "./healthServer.mjs";
 
 // 入口守卫：仅作为脚本直接运行时启动；被 import（如单测）时无副作用
 if (import.meta.url === `file://${process.argv[1]}`) {
-  setupGlobalErrorHandler((msg, err) => logger.fatal("process", msg, err));
   const LOG_FILE = process.env.FEISHU_LOG_FILE || new URL("../data/feishu-bot.log", import.meta.url).pathname;
   const LOG_LEVEL = process.env.FEISHU_LOG_LEVEL || "info";
   const logger = createLogger({ file: LOG_FILE, level: LOG_LEVEL });
+  setupGlobalErrorHandler((msg, err) => logger.fatal("process", msg, err));
   const APP_ID = process.env.FEISHU_APP_ID;
   const APP_SECRET = process.env.FEISHU_APP_SECRET;
   const OPENCODE_DIR = process.env.OPENCODE_DIR || process.cwd();
