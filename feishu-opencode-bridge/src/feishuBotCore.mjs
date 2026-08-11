@@ -282,8 +282,13 @@ export function createOpenCodeServer(opts) {
     throw new Error(`创建会话后无法访问: ${j.id}`);
   }
 
-  /** 发送指令并轮询等待执行完成，返回 assistant 最终文本。 */
-  async function sendMessage(sessionID, text, { timeoutMs = 45 * 60 * 1000 } = {}) {
+  /** 发送指令并轮询等待执行完成,返回 assistant 最终文本。 */
+  async function sendMessage(sessionID, text, {
+    timeoutMs = 45 * 60 * 1000, // 上限不变:长任务合法,45min 硬超时保留
+    idleMs = 120_000,           // 保守默认 2min:长工具调用期间 parts 几分钟无变化是正常的,
+                                // 过短会在任务执行中途把半截输出误返回;idle 只是 step-finish 丢失时的兜底
+    pollMs = 1000,
+  } = {}) {
     const r = await fetchWithRetry(`${base}/session/${sessionID}/message`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -293,9 +298,11 @@ export function createOpenCodeServer(opts) {
     });
     if (!r.ok) throw new Error(`发送指令失败: ${r.status} ${(await r.text()).slice(0, 300)}`);
     const j = await r.json();
-    // assistant 消息 id：POST 返回的 info.id 指向刚生成的 assistant 消息
+    // assistant 消息 id:POST 返回的 info.id 指向刚生成的 assistant 消息
     const assistantID = j?.info?.id;
     const deadline = Date.now() + timeoutMs;
+    let lastChange = Date.now();
+    let lastParts = "";
     while (Date.now() < deadline) {
       try {
         const mr = await fetchWithRetry(`${base}/session/${sessionID}/message`, { timeoutMs: 5000, retries: 1 });
@@ -303,19 +310,32 @@ export function createOpenCodeServer(opts) {
           const list = await mr.json();
           const messages = Array.isArray(list) ? list : list?.data ?? [];
           const target = messages.find((m) => (m?.info?.id ?? m?.id) === assistantID);
-          if (target && (target.parts ?? []).some((p) => p.type === "step-finish")) {
-            const text = (target.parts ?? [])
+          const parts = target?.parts ?? [];
+          const currentText = JSON.stringify(parts);
+          if (parts.some((p) => p.type === "step-finish")) {
+            return parts
               .filter((p) => p.type === "text")
               .map((p) => p.text ?? "")
               .join("\n")
               .trim();
-            return text;
+          }
+          // 空闲检测:parts 内容连续 idleMs 无变化 → 视为完成
+          if (currentText !== lastParts) {
+            lastParts = currentText;
+            lastChange = Date.now();
+          } else if (Date.now() - lastChange >= idleMs && parts.length > 0) {
+            const idleText = parts
+              .filter((p) => p.type === "text")
+              .map((p) => p.text ?? "")
+              .join("\n")
+              .trim();
+            if (idleText) return idleText;
           }
         }
       } catch {
         /* 重试 */
       }
-      await new Promise((res) => setTimeout(res, 1000));
+      await new Promise((res) => setTimeout(res, pollMs));
     }
     return "[超时] opencode 在限定时间内未完成";
   }
@@ -337,7 +357,7 @@ export function createOpenCodeServer(opts) {
     if (child && !child.killed) child.kill("SIGTERM");
   }
 
-  const server = { ensure, startEventLoop, createSession, sendMessage, replyPermission, close, onPermissionAsked, onSseReconnect };
+  const server = { ensure, startEventLoop, createSession, sendMessage, replyPermission, close, onPermissionAsked, onSseReconnect: null };
   return server;
 }
 

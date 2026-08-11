@@ -9,6 +9,7 @@ import {
   formatPermissionAsk,
   isSessionNotFound,
   createFeishuBotCore,
+  createOpenCodeServer,
 } from "../src/feishuBotCore.mjs";
 
 test("extractMessageText: 单聊文本", () => {
@@ -207,4 +208,35 @@ test("handleMessage: /kill 清除卡死的会话映射", async () => {
   await new Promise((r) => setTimeout(r, 50));
 
   fs.rmSync(sessionFile, { force: true });
+});
+
+test("sendMessage: 无 step-finish 时 idle 兜底返回,不死等到 timeout", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url, opts) => {
+    // POST message:返回 assistant id
+    if (url.endsWith("/message") && opts?.method === "POST") {
+      return new Response(JSON.stringify({ info: { id: "asst_1" } }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    // GET message:永远返回相同 parts,不含 step-finish(模拟 step-finish 丢失)
+    if (url.endsWith("/message")) {
+      return new Response(JSON.stringify([{ info: { id: "asst_1" }, parts: [{ type: "text", text: "hello" }] }]), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    return new Response("ok", { status: 200 });
+  };
+  try {
+    const server = createOpenCodeServer({ cmd: "fake", port: 99999 });
+    const start = Date.now();
+    const text = await server.sendMessage("ses_x", "hi", { idleMs: 200, pollMs: 50, timeoutMs: 3000 });
+    const elapsed = Date.now() - start;
+    assert.match(text, /hello/);
+    assert.ok(elapsed < 2000, `should return via idle fallback, got ${elapsed}ms`);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
