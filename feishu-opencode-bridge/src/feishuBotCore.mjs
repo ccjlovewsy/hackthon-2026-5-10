@@ -110,7 +110,7 @@ export function isSessionNotFound(err) {
  * @returns {{reply: "once"|"reject"|"always", index?: number}|null}
  */
 export function parseApprovalReply(text) {
-  const t = String(text ?? "").trim().toLowerCase();
+  const t = String(text ?? "").trim().toLowerCase().replace(/[，,。.!！?？；;：:、]+$/u, "");
   if (!t) return null;
   const single = {
     "允许": "once", "同意": "once", "approve": "once", "allow": "once", "yes": "once", "y": "once",

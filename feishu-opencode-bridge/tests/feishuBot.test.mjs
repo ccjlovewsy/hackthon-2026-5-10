@@ -71,6 +71,17 @@ test("parseApprovalReply: 允许/拒绝/总是允许及编号形式", () => {
   assert.deepEqual(parseApprovalReply(undefined), null);
 });
 
+test("parseApprovalReply: 尾部中英文标点容错", () => {
+  assert.deepEqual(parseApprovalReply("允许，"), { reply: "once" });
+  assert.deepEqual(parseApprovalReply("允许。"), { reply: "once" });
+  assert.deepEqual(parseApprovalReply("允许!"), { reply: "once" });
+  assert.deepEqual(parseApprovalReply("允许?"), { reply: "once" });
+  assert.deepEqual(parseApprovalReply("拒绝。"), { reply: "reject" });
+  assert.deepEqual(parseApprovalReply("允许 2，"), { reply: "once", index: 1 });
+  // 非审批回复不受影响
+  assert.equal(parseApprovalReply("允许一下"), null);
+});
+
 test("formatPermissionAsk: 含操作/范围/文件/diff", () => {
   const text = formatPermissionAsk(
     {
