@@ -13,6 +13,8 @@ import { spawn } from "node:child_process";
 import { appendFileSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fetchWithRetry } from "./fetchWithRetry.mjs";
+import { formatErr } from "./errors.mjs";
+import { createSessionLog } from "./sessionLog.mjs";
 
 // ---------- 纯函数 ----------
 
@@ -392,6 +394,7 @@ function saveSessionMap(file, map) {
  * @param {string} opts.sessionFile 会话映射持久化文件路径
  * @param {(chatId: string, text: string) => Promise<void>|void} opts.reply 回复回调
  * @param {(chatId: string, askText: string, requestID: string) => Promise<void>|void} opts.sendPermissionAsk 权限审查请求回调
+ * @param {string} [opts.sessionLogDir] 每会话日志目录；不传则不启用 /log 查询
  * @param {(msg: string) => void} [opts.log]
  */
 export function createFeishuBotCore(opts) {
@@ -402,7 +405,10 @@ export function createFeishuBotCore(opts) {
     reply,
     sendPermissionAsk,
     log = (msg) => console.log(`[feishuBot] ${msg}`),
+    sessionLogDir,
   } = opts;
+
+  const sessionLog = sessionLogDir ? createSessionLog({ dir: sessionLogDir }) : null;
 
   const metrics = {
     messagesReceived: 0,
@@ -502,6 +508,22 @@ export function createFeishuBotCore(opts) {
       return killText;
     }
 
+    // 路由 0.5：查询会话日志
+    if (text === "/log" || text.startsWith("/log ")) {
+      if (!sessionLog) {
+        const noLog = "(会话日志未启用,设置 FEISHU_SESSION_LOG_DIR 启用)";
+        await reply?.(chatId, noLog);
+        return noLog;
+      }
+      const parts = text.split(/\s+/);
+      const op = parts[1] || "tail";
+      const arg = parts.slice(2).join(" ");
+      const out = sessionLog.query(chatId, op, arg);
+      const finalOut = out.length > 4000 ? `${out.slice(0, 4000)}\n…(已截断)` : out;
+      await reply?.(chatId, finalOut);
+      return finalOut;
+    }
+
     // 路由 1：确认授权回复
     const parsed = parseApprovalReply(text);
     if (parsed) {
@@ -533,24 +555,26 @@ export function createFeishuBotCore(opts) {
     // 路由 2：新指令
     log(`指令 chat=${chatId}: ${JSON.stringify(text)}`);
     return queued(chatId, async () => {
-      try {
-        let sessionID = sessionMap[chatId];
-        if (!sessionID) {
-          sessionID = await server.createSession();
-          metrics.sessionsCreated++;
-          sessionMap[chatId] = sessionID;
-          saveSessionMap(sessionFile, sessionMap);
-          log(`新会话: ${chatId} → ${sessionID}`);
-        }
-        sessionChat.set(sessionID, chatId);
-        log(`执行 (session ${sessionID}): ${JSON.stringify(text)}`);
+      let sessionID = sessionMap[chatId];
+      if (!sessionID) {
+        sessionID = await server.createSession();
+        metrics.sessionsCreated++;
+        sessionMap[chatId] = sessionID;
+        saveSessionMap(sessionFile, sessionMap);
+        log(`新会话: ${chatId} → ${sessionID}`);
+      }
+      sessionChat.set(sessionID, chatId);
+      log(`执行 (session ${sessionID}): ${JSON.stringify(text)}`);
+      sessionLog?.append(chatId, `USER: ${text}`);
 
-        let outText;
+      let outText;
+      try {
         try {
           outText = await server.sendMessage(sessionID, text);
         } catch (err) {
           if (!isSessionNotFound(err)) throw err;
-          log(`会话 ${sessionID} 已失效,重建: ${err?.message ?? err}`);
+          sessionLog?.append(chatId, `SESSION_INVALID: ${formatErr(err)}`);
+          log(`会话 ${sessionID} 已失效,重建: ${formatErr(err)}`);
           delete sessionMap[chatId];
           saveSessionMap(sessionFile, sessionMap);
           sessionChat.delete(sessionID);
@@ -561,15 +585,18 @@ export function createFeishuBotCore(opts) {
           sessionChat.set(sessionID, chatId);
           outText = await server.sendMessage(sessionID, text); // 重建后重发一次;再失败直接抛
         }
-        const replyText = outText.trim() || "(无输出)";
-        const finalText = replyText.length > 4000 ? `${replyText.slice(0, 4000)}\n…(已截断)` : replyText;
-        await reply?.(chatId, finalText);
-        metrics.messagesReplied++;
-        return finalText;
       } catch (err) {
+        // sendMessage 失败(含自愈重发仍失败)记 ERROR;reply 在 try 外,失败不记 SESSION_INVALID
+        sessionLog?.append(chatId, `ERROR: ${formatErr(err)}`);
         metrics.messagesFailed++;
         throw err;
       }
+      const replyText = outText.trim() || "(无输出)";
+      const finalText = replyText.length > 4000 ? `${replyText.slice(0, 4000)}\n…(已截断)` : replyText;
+      sessionLog?.append(chatId, `ASSISTANT: ${finalText.slice(0, 500)}`);
+      await reply?.(chatId, finalText);
+      metrics.messagesReplied++;
+      return finalText;
     });
   }
 

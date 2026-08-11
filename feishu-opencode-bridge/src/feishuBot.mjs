@@ -30,6 +30,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   const OPENCODE_DATA_DIR = process.env.OPENCODE_DATA_DIR || undefined;
   const OPENCODE_SERVE_PORT = Number(process.env.OPENCODE_SERVE_PORT || 41234);
   const SESSION_FILE = process.env.FEISHU_SESSION_FILE || new URL("../data/feishu-sessions.json", import.meta.url).pathname;
+  const SESSION_LOG_DIR = process.env.FEISHU_SESSION_LOG_DIR || new URL("../data/session-logs/", import.meta.url).pathname;
 
   if (!APP_ID || !APP_SECRET) {
     logger.error("feishuBot", "缺少 FEISHU_APP_ID / FEISHU_APP_SECRET");
@@ -73,6 +74,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     reply: sendToFeishu,
     sendPermissionAsk: (chatId, askText) => sendToFeishu(chatId, askText),
     log: (msg) => logger.info("feishuBotCore", msg),
+    sessionLogDir: SESSION_LOG_DIR,
   });
 
   // 进度推送端点：POST /progress {"text":"...","chat_id":"..."} 复用已认证的 sendToFeishu
