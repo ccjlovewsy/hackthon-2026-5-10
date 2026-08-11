@@ -1,7 +1,7 @@
 // v3 沙箱端到端：模拟飞书指令 → opencode 请求写文件 → 审查消息 → 用户"允许" → 写入成功
-// 手动运行：node tmp/feishu-bot-e2e-v3.mjs
+// 手动运行：node scripts/feishu-bot-e2e-v3.mjs
 import { existsSync, readFileSync, rmSync } from "node:fs";
-import { createFeishuBotCore, createOpenCodeServer, parseAllowedUsers } from "../src/backend/app/feishuBotCore.mjs";
+import { createFeishuBotCore, createOpenCodeServer, parseAllowedUsers } from "../src/feishuBotCore.mjs";
 
 const PORT = 41235;
 const FILE = "/tmp/oc-bridge-e2e.txt";

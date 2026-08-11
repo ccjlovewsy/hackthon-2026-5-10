@@ -470,5 +470,5 @@ export function createFeishuBotCore(opts) {
     });
   }
 
-  return { handleMessage, extractMessageText };
+  return { handleMessage, extractMessageText, getChatIds: () => Object.keys(sessionMap) };
 }

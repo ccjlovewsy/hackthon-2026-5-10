@@ -11,7 +11,6 @@
     "preparse:sample": "node src/backend/domain/preParseTextbook2JSON/index.mjs origin-textbooks/03_生理学.pdf data/preParseTextbook2JSON-03_生理学.json book_03",
     "parse-entity:sample": "node src/backend/domain/parseEntityInTextbookJSON2VisualNode/index.mjs --sample",
     "rag:sample": "node src/backend/domain/RAG/index.mjs --sample",
-    "bot:feishu": "node src/backend/app/feishuBot.mjs",
     "frontend:smoke": "node --test tests/frontend.test.mjs",
     "frontend:browser-smoke": "node tests/frontend-browser-smoke.mjs",
     "test": "node --test tests/**/*.test.mjs"
@@ -20,7 +19,6 @@
     "@langchain/core": "^0.3.79",
     "@langchain/openai": "^0.5.18",
     "@langchain/textsplitters": "^0.1.0",
-    "@larksuiteoapi/node-sdk": "^1.72.0",
     "cytoscape": "^3.33.3",
     "dotenv": "^17.4.2",
     "echarts": "^6.0.0",

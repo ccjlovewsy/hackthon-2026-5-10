@@ -7,7 +7,7 @@ import {
   isDuplicateMessage,
   parseApprovalReply,
   formatPermissionAsk,
-} from "../src/backend/app/feishuBotCore.mjs";
+} from "../src/feishuBotCore.mjs";
 
 test("extractMessageText: 单聊文本", () => {
   const msg = { content: JSON.stringify({ text: "你好" }), chat_type: "p2p" };

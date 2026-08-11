@@ -1,5 +1,6 @@
 import "dotenv/config";
 import lark from "@larksuiteoapi/node-sdk";
+import { createServer } from "node:http";
 import { createFeishuBotCore, createOpenCodeServer, parseAllowedUsers } from "./feishuBotCore.mjs";
 
 /**
@@ -21,7 +22,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   // 数据目录重定向（XDG_DATA_HOME），仅沙箱/隔离环境需要
   const OPENCODE_DATA_DIR = process.env.OPENCODE_DATA_DIR || undefined;
   const OPENCODE_SERVE_PORT = Number(process.env.OPENCODE_SERVE_PORT || 41234);
-  const SESSION_FILE = process.env.FEISHU_SESSION_FILE || new URL("../../../data/feishu-sessions.json", import.meta.url).pathname;
+  const SESSION_FILE = process.env.FEISHU_SESSION_FILE || new URL("../data/feishu-sessions.json", import.meta.url).pathname;
 
   if (!APP_ID || !APP_SECRET) {
     console.error(
@@ -67,6 +68,41 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     sendPermissionAsk: (chatId, askText) => sendToFeishu(chatId, askText),
   });
 
+  // 进度推送端点：POST /progress {"text":"...","chat_id":"..."} 复用已认证的 sendToFeishu
+  const PROGRESS_PORT = Number(process.env.FEISHU_PROGRESS_PORT || 41235);
+  const progressServer = createServer((req, res) => {
+    if (req.method !== "POST" || req.url !== "/progress") {
+      res.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
+      res.end("not found");
+      return;
+    }
+    let body = "";
+    req.on("data", (c) => (body += c));
+    req.on("end", async () => {
+      try {
+        const { text, chat_id } = JSON.parse(body || "{}");
+        if (!text) {
+          res.writeHead(400, { "content-type": "text/plain; charset=utf-8" });
+          res.end("missing text");
+          return;
+        }
+        const ids = core.getChatIds();
+        const chatId = chat_id || ids[0];
+        if (!chatId) {
+          res.writeHead(409, { "content-type": "text/plain; charset=utf-8" });
+          res.end("no active chat (先在飞书给机器人发条消息配对)");
+          return;
+        }
+        await sendToFeishu(chatId, String(text));
+        res.writeHead(200, { "content-type": "text/plain; charset=utf-8" });
+        res.end(`ok (chat=${chatId.slice(0, 12)}…)`);
+      } catch (e) {
+        res.writeHead(500, { "content-type": "text/plain; charset=utf-8" });
+        res.end(String(e?.message ?? e));
+      }
+    });
+  });
+
   const eventDispatcher = new lark.EventDispatcher({}).register({
     "im.message.receive_v1": async (data) => {
       try {
@@ -88,6 +124,10 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     await server.ensure();
     server.startEventLoop();
     console.log(`[feishuBot] opencode serve 就绪: http://127.0.0.1:${OPENCODE_SERVE_PORT}`);
+
+    progressServer.listen(PROGRESS_PORT, "127.0.0.1", () => {
+      console.log(`[feishuBot] 进度推送端点: http://127.0.0.1:${PROGRESS_PORT}/progress`);
+    });
 
     const wsClient = new lark.WSClient({
       appId: APP_ID,

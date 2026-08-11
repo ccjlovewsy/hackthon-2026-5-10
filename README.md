@@ -72,7 +72,7 @@ npm test
 
 ## 测试
 
-`npm test` 运行全部回归（`node --test tests/**/*.test.mjs`），当前共 50 项用例，全部通过。按模块分布：
+`npm test` 运行全部回归（`node --test tests/**/*.test.mjs`），当前共 41 项用例，全部通过。按模块分布：
 
 | 测试文件 | 用例数 | 覆盖内容 |
 | --- | --- | --- |
@@ -82,7 +82,6 @@ npm test
 | `tests/rag.test.mjs` | 7 | 知识库构建、top-5 检索与引用、引用自动补齐/剔除、embedding 凭证、HTTP API |
 | `tests/llm.test.mjs` | 4 | LLM 注册（不泄漏 apiKey）、参数校验、OpenAI 兼容调用、HTTP API |
 | `tests/frontend.test.mjs` | 7 | 去重交互、图谱布局、四视图洞察、防抖、前端辅助 API |
-| `tests/feishuBot.test.mjs` | 9 | 飞书消息提取（单聊/群聊）、用户白名单、消息判重、审批回复解析与格式化 |
 
 ## 文档入口
 

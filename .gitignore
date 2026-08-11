@@ -31,8 +31,8 @@ lerna-debug.log*
 .node_repl_history
 
 # DATA
-data/
-data/textbooks/*.pdf
+/data/
+/data/textbooks/*.pdf
 origin-textbooks/
 *.pdf
 

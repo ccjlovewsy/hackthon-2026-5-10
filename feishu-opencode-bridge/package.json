@@ -1,0 +1,17 @@
+{
+  "name": "feishu-opencode-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node src/feishuBot.mjs",
+    "test": "node --test tests/*.test.mjs"
+  },
+  "dependencies": {
+    "@larksuiteoapi/node-sdk": "^1.72.0",
+    "dotenv": "^17.4.2"
+  }
+}
