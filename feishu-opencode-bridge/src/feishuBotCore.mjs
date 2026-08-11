@@ -223,6 +223,7 @@ export function createOpenCodeServer(opts) {
         }
       } catch (err) {
         log(`SSE 断开: ${err?.message ?? err}，3s 后重连`);
+        server.onSseReconnect?.();
         await new Promise((r) => setTimeout(r, 3000));
       }
     }
@@ -324,7 +325,7 @@ export function createOpenCodeServer(opts) {
     if (child && !child.killed) child.kill("SIGTERM");
   }
 
-  const server = { ensure, startEventLoop, createSession, sendMessage, replyPermission, close, onPermissionAsked };
+  const server = { ensure, startEventLoop, createSession, sendMessage, replyPermission, close, onPermissionAsked, onSseReconnect };
   return server;
 }
 
@@ -371,6 +372,18 @@ export function createFeishuBotCore(opts) {
     log = (msg) => console.log(`[feishuBot] ${msg}`),
   } = opts;
 
+  const metrics = {
+    messagesReceived: 0,
+    messagesReplied: 0,
+    messagesFailed: 0,
+    permissionsAsked: 0,
+    permissionsApproved: 0,
+    permissionsRejected: 0,
+    sessionsCreated: 0,
+    sseReconnects: 0,
+    startedAt: Date.now(),
+  };
+
   const sessionMap = loadSessionMap(sessionFile);
   // chat_id → 串行队列，避免同一会话并发写
   const queues = new Map();
@@ -379,7 +392,12 @@ export function createFeishuBotCore(opts) {
   // 待审查的权限请求：requestID → { chatId, req, askedAt }
   const pendingRequests = new Map();
 
+  server.onSseReconnect = () => {
+    metrics.sseReconnects++;
+  };
+
   server.onPermissionAsked = (req) => {
+    metrics.permissionsAsked++;
     const chatId = sessionChat.get(req.sessionID);
     if (!chatId) {
       log(`权限请求无对应飞书会话，自动拒绝: ${req.id}`);
@@ -398,9 +416,10 @@ export function createFeishuBotCore(opts) {
     const prev = queues.get(chatId) ?? Promise.resolve();
     const next = prev.then(task, task);
     queues.set(chatId, next);
+    // 清理队列条目；.catch 兜底避免 task 抛错时 finally 链产生 unhandledRejection
     next.finally(() => {
       if (queues.get(chatId) === next) queues.delete(chatId);
-    });
+    }).catch(() => {});
     return next;
   }
 
@@ -411,6 +430,7 @@ export function createFeishuBotCore(opts) {
   async function handleMessage(data) {
     const { message, sender } = data ?? {};
     if (!message) return undefined;
+    metrics.messagesReceived++;
 
     if (isDuplicateMessage(message.message_id)) {
       log(`忽略重复消息: ${message.message_id}`);
@@ -449,11 +469,14 @@ export function createFeishuBotCore(opts) {
       log(`用户回复「${text}」→ ${target.req.id} ${parsed.reply}`);
       try {
         await server.replyPermission(target.req.id, parsed.reply);
+        if (parsed.reply === "reject") metrics.permissionsRejected++;
+        else metrics.permissionsApproved++;
         const done = parsed.reply === "reject" ? "已拒绝，opencode 已中止该操作。" : parsed.reply === "always" ? "已允许（本次会话内同范围操作自动放行）。" : "已允许，opencode 继续执行。";
         const replyText = `✅ ${done}`;
         await reply?.(chatId, replyText);
         return replyText;
       } catch (err) {
+        metrics.messagesFailed++;
         const errText = `❌ 权限回复失败：${err?.message ?? err}`;
         await reply?.(chatId, errText);
         return errText;
@@ -463,23 +486,39 @@ export function createFeishuBotCore(opts) {
     // 路由 2：新指令
     log(`指令 chat=${chatId}: ${JSON.stringify(text)}`);
     return queued(chatId, async () => {
-      let sessionID = sessionMap[chatId];
-      if (!sessionID) {
-        sessionID = await server.createSession();
-        sessionMap[chatId] = sessionID;
-        saveSessionMap(sessionFile, sessionMap);
-        log(`新会话: ${chatId} → ${sessionID}`);
-      }
-      sessionChat.set(sessionID, chatId);
-      log(`执行 (session ${sessionID}): ${JSON.stringify(text)}`);
+      try {
+        let sessionID = sessionMap[chatId];
+        if (!sessionID) {
+          sessionID = await server.createSession();
+          metrics.sessionsCreated++;
+          sessionMap[chatId] = sessionID;
+          saveSessionMap(sessionFile, sessionMap);
+          log(`新会话: ${chatId} → ${sessionID}`);
+        }
+        sessionChat.set(sessionID, chatId);
+        log(`执行 (session ${sessionID}): ${JSON.stringify(text)}`);
 
-      const outText = await server.sendMessage(sessionID, text);
-      const replyText = outText.trim() || "(无输出)";
-      const finalText = replyText.length > 4000 ? `${replyText.slice(0, 4000)}\n…(已截断)` : replyText;
-      await reply?.(chatId, finalText);
-      return finalText;
+        const outText = await server.sendMessage(sessionID, text);
+        const replyText = outText.trim() || "(无输出)";
+        const finalText = replyText.length > 4000 ? `${replyText.slice(0, 4000)}\n…(已截断)` : replyText;
+        await reply?.(chatId, finalText);
+        metrics.messagesReplied++;
+        return finalText;
+      } catch (err) {
+        metrics.messagesFailed++;
+        throw err;
+      }
     });
   }
 
-  return { handleMessage, extractMessageText, getChatIds: () => Object.keys(sessionMap) };
+  return {
+    handleMessage,
+    extractMessageText,
+    getChatIds: () => Object.keys(sessionMap),
+    getMetrics: () => ({
+      ...metrics,
+      activeSessions: Object.keys(sessionMap).length,
+      uptimeMs: Date.now() - metrics.startedAt,
+    }),
+  };
 }

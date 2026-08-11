@@ -4,6 +4,7 @@ import { createServer } from "node:http";
 import { createFeishuBotCore, createOpenCodeServer, parseAllowedUsers } from "./feishuBotCore.mjs";
 import { setupGlobalErrorHandler } from "./globalErrorHandler.mjs";
 import { createLogger } from "./logger.mjs";
+import { createHealthServer } from "./healthServer.mjs";
 
 /**
  * 飞书机器人 → opencode 桥（独立进程）。
@@ -133,6 +134,12 @@ if (import.meta.url === `file://${process.argv[1]}`) {
 
     progressServer.listen(PROGRESS_PORT, "127.0.0.1", () => {
       logger.info("feishuBot", `进度推送端点: http://127.0.0.1:${PROGRESS_PORT}/progress`);
+    });
+
+    const HEALTH_PORT = Number(process.env.FEISHU_HEALTH_PORT || 41236);
+    const healthServer = createHealthServer({ core, port: HEALTH_PORT });
+    healthServer.listen(() => {
+      logger.info("feishuBot", `健康端点: http://127.0.0.1:${HEALTH_PORT}/health`);
     });
 
     const wsClient = new lark.WSClient({
