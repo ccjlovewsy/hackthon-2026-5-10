@@ -125,7 +125,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     "im.chat.access_event.bot_p2p_chat_entered_v1": async (data) => {
       const chatId = data?.chat_id;
       if (!chatId) return;
-      await sendToFeishu(chatId, "✅ 桥已连接。请发送指令，我会调用本机 opencode 执行；敏感操作会先发给你审查确认。");
+      await sendToFeishu(chatId, "嗨 👋 我在呢。直接说你想干啥，我会用本机 opencode 帮你搞定——写代码、改文件、跑命令都行；敏感操作会先问你一下。");
     },
   });
 
