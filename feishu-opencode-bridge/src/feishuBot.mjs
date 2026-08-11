@@ -3,6 +3,7 @@ import lark from "@larksuiteoapi/node-sdk";
 import { createServer } from "node:http";
 import { createFeishuBotCore, createOpenCodeServer, parseAllowedUsers } from "./feishuBotCore.mjs";
 import { setupGlobalErrorHandler } from "./globalErrorHandler.mjs";
+import { createLogger } from "./logger.mjs";
 
 /**
  * 飞书机器人 → opencode 桥（独立进程）。
@@ -16,7 +17,10 @@ import { setupGlobalErrorHandler } from "./globalErrorHandler.mjs";
 
 // 入口守卫：仅作为脚本直接运行时启动；被 import（如单测）时无副作用
 if (import.meta.url === `file://${process.argv[1]}`) {
-  setupGlobalErrorHandler();
+  setupGlobalErrorHandler((msg, err) => logger.fatal("process", msg, err));
+  const LOG_FILE = process.env.FEISHU_LOG_FILE || new URL("../data/feishu-bot.log", import.meta.url).pathname;
+  const LOG_LEVEL = process.env.FEISHU_LOG_LEVEL || "info";
+  const logger = createLogger({ file: LOG_FILE, level: LOG_LEVEL });
   const APP_ID = process.env.FEISHU_APP_ID;
   const APP_SECRET = process.env.FEISHU_APP_SECRET;
   const OPENCODE_DIR = process.env.OPENCODE_DIR || process.cwd();
@@ -27,9 +31,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   const SESSION_FILE = process.env.FEISHU_SESSION_FILE || new URL("../data/feishu-sessions.json", import.meta.url).pathname;
 
   if (!APP_ID || !APP_SECRET) {
-    console.error(
-      "[feishuBot] 缺少 FEISHU_APP_ID / FEISHU_APP_SECRET，请先在 .env 中配置（参考 .env.example）"
-    );
+    logger.error("feishuBot", "缺少 FEISHU_APP_ID / FEISHU_APP_SECRET");
     process.exit(1);
   }
 
@@ -49,9 +51,9 @@ if (import.meta.url === `file://${process.argv[1]}`) {
           content: JSON.stringify({ text }),
         },
       });
-      console.log(`[feishuBot] 已回复 chat=${chatId}: message_id=${resp?.data?.message_id ?? "?"}`);
+      logger.info("feishuBot", `已回复 chat=${chatId}: message_id=${resp?.data?.message_id ?? "?"}`);
     } catch (err) {
-      console.error("[feishuBot] 回复失败:", err?.code, err?.msg ?? err);
+      logger.error("feishuBot", "回复失败", err);
     }
   }
 
@@ -62,12 +64,14 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     cwd: OPENCODE_DIR,
   });
 
+  const allowedUsers = parseAllowedUsers(process.env.OPENCODE_ALLOWED_USERS);
   const core = createFeishuBotCore({
     server,
-    allowedUsers: parseAllowedUsers(process.env.OPENCODE_ALLOWED_USERS),
+    allowedUsers,
     sessionFile: SESSION_FILE,
     reply: sendToFeishu,
     sendPermissionAsk: (chatId, askText) => sendToFeishu(chatId, askText),
+    log: (msg) => logger.info("feishuBotCore", msg),
   });
 
   // 进度推送端点：POST /progress {"text":"...","chat_id":"..."} 复用已认证的 sendToFeishu
@@ -111,7 +115,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
         await core.handleMessage(data);
       } catch (err) {
         // 兜底：单条事件失败不影响后续事件与长连接
-        console.error("[feishuBot] 事件处理失败:", err);
+        logger.error("feishuBot", "事件处理失败", err);
       }
     },
     // 用户进入与机器人的单聊会话时，主动回复一条，验证链路在线
@@ -125,10 +129,10 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   async function main() {
     await server.ensure();
     server.startEventLoop();
-    console.log(`[feishuBot] opencode serve 就绪: http://127.0.0.1:${OPENCODE_SERVE_PORT}`);
+    logger.info("feishuBot", `opencode serve 就绪: http://127.0.0.1:${OPENCODE_SERVE_PORT}`);
 
     progressServer.listen(PROGRESS_PORT, "127.0.0.1", () => {
-      console.log(`[feishuBot] 进度推送端点: http://127.0.0.1:${PROGRESS_PORT}/progress`);
+      logger.info("feishuBot", `进度推送端点: http://127.0.0.1:${PROGRESS_PORT}/progress`);
     });
 
     const wsClient = new lark.WSClient({
@@ -137,15 +141,16 @@ if (import.meta.url === `file://${process.argv[1]}`) {
       loggerLevel: lark.LoggerLevel.info,
     });
     await wsClient.start({ eventDispatcher });
-    console.log("[feishuBot] 飞书长连接已启动，等待飞书消息…（Ctrl+C 退出）");
-    console.log(`[feishuBot] opencode 工作目录: ${OPENCODE_DIR}`);
-    console.log(
-      `[feishuBot] 授权用户: ${parseAllowedUsers(process.env.OPENCODE_ALLOWED_USERS).length ? parseAllowedUsers(process.env.OPENCODE_ALLOWED_USERS).join(", ") : "(未配置，将拒绝所有用户)"}`
+    logger.info("feishuBot", "飞书长连接已启动，等待飞书消息…（Ctrl+C 退出）");
+    logger.info("feishuBot", `opencode 工作目录: ${OPENCODE_DIR}`);
+    logger.info(
+      "feishuBot",
+      `授权用户: ${allowedUsers.length ? allowedUsers.join(", ") : "(未配置，将拒绝所有用户)"}`
     );
   }
 
   main().catch((err) => {
-    console.error("[feishuBot] 启动失败:", err);
+    logger.error("feishuBot", "启动失败", err);
     process.exit(1);
   });
 }
