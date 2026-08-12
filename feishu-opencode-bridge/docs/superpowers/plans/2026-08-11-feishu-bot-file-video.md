@@ -95,6 +95,11 @@
 
 - [ ] **Step 0: 定位 abort 实际发生在哪个请求**
 
+> ✅ **定位结论(2026-08-12 日志实测,已确认)**:日志显示每次 abort 都在 `执行 (session xxx)` 之后 **~61s** 整——
+> 61s ≈ `30s × 2 + 500ms`(fetchWithRetry 对 POST 超时重试一次)。而轻指令("你好")5s 内成功回复。
+> **结论:POST /session/{id}/message 同步阻塞——耗时=指令执行时长,30s 超时在复杂指令上必然 abort。**
+> 修复见 Step 1(POST 超时提到 45min + `retries: 0` 防重复执行)。
+
 1. `tail -f data/feishu-bot.log` 复现一次,看 abort 前最后一条日志:
    - 停在 `执行 (session xxx): ...` → 在 `sendMessage` 内(POST 指令 或 轮询 GET)
    - 停在 `新会话: ...` → `createSession` 超时
@@ -113,21 +118,24 @@
 `src/feishuBotCore.mjs` 顶部(import 之后,纯函数之前)加:
 
 ```js
-// opencode serve 内网请求超时:opencode 处理指令通常 10-60s,超时太短会触发
-// AbortController → "This operation was aborted"。POST /message 若同步阻塞
-// (serve 等到指令执行完才返回),30s 也不保险——用 Step 0 的 curl 计时确认后调整。
-const POST_MESSAGE_TIMEOUT_MS = 30_000;   // POST 指令(Step 0 确认同步阻塞则提到 60_000)
-const POLL_TIMEOUT_MS = 15_000;           // 轮询 GET /message(原 5000 太脆)
-const POLL_RETRIES = 3;                   // 轮询重试(原 retries: 1)
-const CREATE_SESSION_TIMEOUT_MS = 15_000; // createSession(原 5000)
+// opencode serve 内网请求超时。
+// ⚠️ 实测(2026-08-12 日志):POST /session/{id}/message **同步阻塞**——耗时=指令执行时长
+// (简单指令 5s 内返回,"你好";复杂指令 >30s)。旧值 30s×2 次重试在 ~61s 后抛
+// "This operation was aborted"。因此 POST 超时须覆盖完整指令执行窗口(与轮询
+// deadline 一致,45min),且 retries=0——同步阻塞下超时重试=重复执行指令,危险。
+const POST_MESSAGE_TIMEOUT_MS = 45 * 60 * 1000;  // POST 指令(同步阻塞,上限=轮询 deadline)
+const POST_MESSAGE_RETRIES = 0;                  // 禁止重试(避免重复执行)
+const POLL_TIMEOUT_MS = 15_000;                  // 轮询 GET /message(原 5000 太脆)
+const POLL_RETRIES = 3;                          // 轮询重试(原 retries: 1)
+const CREATE_SESSION_TIMEOUT_MS = 15_000;        // createSession(原 5000)
 ```
 
-替换 `createOpenCodeServer` 内的三处硬编码:
-- POST 指令(`sendMessage` 内,现 `timeoutMs: 30_000`):`timeoutMs: POST_MESSAGE_TIMEOUT_MS`
-- 轮询 GET(`sendMessage` 内,现 `timeoutMs: 5000, retries: 1`):`timeoutMs: POLL_TIMEOUT_MS, retries: POLL_RETRIES`
-- `createSession` POST(现 `timeoutMs: 5000, retries: 1`):`timeoutMs: CREATE_SESSION_TIMEOUT_MS`
+替换 `createOpenCodeServer` 内的硬编码:
+- POST 指令(`sendMessage` 内):`timeoutMs: POST_MESSAGE_TIMEOUT_MS, retries: POST_MESSAGE_RETRIES`(**已实测:同步阻塞,禁重试**)
+- 轮询 GET(`sendMessage` 内):`timeoutMs: POLL_TIMEOUT_MS, retries: POLL_RETRIES`
+- `createSession` POST:`timeoutMs: CREATE_SESSION_TIMEOUT_MS`
 
-(定位结论若指向某处,以该处为准;其余保留放宽值,内网请求超时放宽无害。)
+(定位结论已确认指向 POST 同步阻塞;轮询/建会话放宽值保留,内网请求超时放宽无害。)
 
 - [ ] **Step 2: 补 fetchWithRetry 慢响应测试**
 

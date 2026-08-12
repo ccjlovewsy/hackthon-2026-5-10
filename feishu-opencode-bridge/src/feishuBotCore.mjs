@@ -18,13 +18,16 @@ import { createSessionLog } from "./sessionLog.mjs";
 
 // ---------- 内网请求超时常量 ----------
 
-// opencode serve 内网请求超时:opencode 处理指令通常 10-60s,超时太短会触发
-// AbortController → "This operation was aborted"。POST /message 若同步阻塞
-// (serve 等到指令执行完才返回),30s 也不保险——用 curl 计时确认后调整。
-const POST_MESSAGE_TIMEOUT_MS = 30_000;   // POST 指令(若确认同步阻塞则提到 60_000)
-const POLL_TIMEOUT_MS = 15_000;           // 轮询 GET /message(原 5000 太脆)
-const POLL_RETRIES = 3;                   // 轮询重试(原 retries: 1)
-const CREATE_SESSION_TIMEOUT_MS = 15_000; // createSession(原 5000)
+// opencode serve 内网请求超时。
+// ⚠️ 实测(2026-08-12 日志):POST /session/{id}/message **同步阻塞**——耗时=指令执行时长
+// (简单指令 5s 内返回,"你好";复杂指令 >30s)。旧值 30s×2 次重试在 ~61s 后抛
+// "This operation was aborted"。因此 POST 超时须覆盖完整指令执行窗口(与轮询
+// deadline 一致,45min),且 retries=0——同步阻塞下超时重试=重复执行指令,危险。
+const POST_MESSAGE_TIMEOUT_MS = 45 * 60 * 1000;  // POST 指令(同步阻塞,上限=轮询 deadline)
+const POST_MESSAGE_RETRIES = 0;                  // 禁止重试(避免重复执行)
+const POLL_TIMEOUT_MS = 15_000;                  // 轮询 GET /message(原 5000 太脆)
+const POLL_RETRIES = 3;                          // 轮询重试(原 retries: 1)
+const CREATE_SESSION_TIMEOUT_MS = 15_000;        // createSession(原 5000)
 import { isPathSafe, extractFileReferences, parseFilePathCommand, validateExtension } from "./fileTransfer.mjs";
 
 // ---------- 纯函数 ----------
@@ -308,8 +311,8 @@ export function createOpenCodeServer(opts) {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ parts: [{ type: "text", text }] }),
-      timeoutMs: POST_MESSAGE_TIMEOUT_MS, // opencode 处理指令通常 10-60s,5s 太短会 abort
-      retries: 1,
+      timeoutMs: POST_MESSAGE_TIMEOUT_MS, // 同步阻塞(实测),须覆盖完整指令执行窗口;retries=0 防重复执行
+      retries: POST_MESSAGE_RETRIES,
     });
     if (!r.ok) {
       const err = new Error(`发送指令失败: ${r.status} ${(await r.text()).slice(0, 300)}`);
