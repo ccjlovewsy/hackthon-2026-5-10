@@ -16,6 +16,12 @@ import { fetchWithRetry } from "./fetchWithRetry.mjs";
 import { formatErr } from "./errors.mjs";
 import { createSessionLog } from "./sessionLog.mjs";
 
+// opencode serve POST /message 的超时:opencode 处理指令通常 10-60s,
+// 5s 太短会触发 AbortController → "This operation was aborted"。
+// 30s 是 POST 接口本身响应(不是指令执行完成)的合理上限;指令实际执行
+// 走轮询,默认 45min deadline。
+const POST_MESSAGE_TIMEOUT_MS = 30_000;
+
 // ---------- 纯函数 ----------
 
 /**
@@ -297,7 +303,7 @@ export function createOpenCodeServer(opts) {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ parts: [{ type: "text", text }] }),
-      timeoutMs: 5000,
+      timeoutMs: POST_MESSAGE_TIMEOUT_MS, // opencode 处理指令通常 10-60s,5s 太短会 abort
       retries: 1,
     });
     if (!r.ok) {

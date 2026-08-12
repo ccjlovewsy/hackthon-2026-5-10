@@ -431,6 +431,42 @@ test("handleMessage: /kill 后旧任务 404 自愈不再写回 sessionMap(代次
   fs.rmSync(sessionFile, { force: true });
 });
 
+test("handleMessage: sendMessage 非 404 错误时抛出,让 feishuBot.mjs catch 回复用户 '❌ 处理失败'", async () => {
+  const fs = await import("node:fs");
+  const sessionFile = "/tmp/test-sessions-err-surface.json";
+  fs.rmSync(sessionFile, { force: true });
+
+  const fakeServer = {
+    onPermissionAsked: null,
+    createSession: async () => "ses_err",
+    sendMessage: async () => {
+      throw new Error("This operation was aborted");
+    },
+    replyPermission: async () => {},
+  };
+  const replies = [];
+  const core = createFeishuBotCore({
+    server: fakeServer,
+    allowedUsers: ["ou_me"],
+    sessionFile,
+    reply: (chatId, text) => replies.push(text),
+    sendPermissionAsk: () => {},
+    log: () => {},
+  });
+
+  // handleMessage 应抛出(由 feishuBot.mjs 的 catch 回复 ❌ 处理失败)
+  await assert.rejects(
+    core.handleMessage({
+      message: { message_id: "om_err1", chat_id: "oc_err", content: JSON.stringify({ text: "触发 abort" }), chat_type: "p2p" },
+      sender: { sender_id: { open_id: "ou_me" } },
+    }),
+    (err) => /aborted/i.test(err.message)
+  );
+  // core 自身不回复错误(由 feishuBot.mjs 的 catch 处理),这里只确保抛出
+  assert.equal(replies.length, 0, "core 不应在 throw 前回复(由 feishuBot.mjs catch 回复)");
+  fs.rmSync(sessionFile, { force: true });
+});
+
 test("close: 停止 SSE 重连循环", async () => {
   const originalFetch = globalThis.fetch;
   let fetchCalls = 0;

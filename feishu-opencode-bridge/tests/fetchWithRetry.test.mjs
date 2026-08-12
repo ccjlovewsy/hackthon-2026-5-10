@@ -165,3 +165,19 @@ test("fetchWithRetry: already-aborted signal aborts immediately", async () => {
     globalThis.fetch = originalFetch;
   }
 });
+
+test("fetchWithRetry: 8s 响应在 30s 超时下不 abort(回归 This operation was aborted)", { timeout: 15000 }, async () => {
+  const calls = [];
+  globalThis.fetch = async (url) => {
+    calls.push(url);
+    await new Promise((r) => setTimeout(r, 8000));
+    return new Response(JSON.stringify({ ok: true }), { status: 200 });
+  };
+  try {
+    const res = await fetchWithRetry("http://x/test", { timeoutMs: 30_000, retries: 0 });
+    assert.equal(res.status, 200);
+    assert.equal(calls.length, 1, "8s 响应在 30s 超时下不应重试");
+  } finally {
+    // 恢复 fetch 由其他 test 自行处理;这里只确保不 abort
+  }
+});

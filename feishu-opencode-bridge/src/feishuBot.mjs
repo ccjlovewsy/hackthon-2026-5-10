@@ -43,6 +43,9 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     appType: lark.AppType.SelfBuild,
   });
 
+  // 欢迎消息 per-chatId 限流:飞书长连接可能重推 access_event,避免连发多条
+  const welcomeSentAt = new Map();
+
   async function sendToFeishu(chatId, text) {
     try {
       const resp = await client.im.message.create({
@@ -119,13 +122,23 @@ if (import.meta.url === `file://${process.argv[1]}`) {
       } catch (err) {
         // 兜底：单条事件失败不影响后续事件与长连接
         logger.error("feishuBot", "事件处理失败", err);
+        // 给用户回复错误,避免"发了消息没反应"
+        const chatId = data?.message?.chat_id;
+        if (chatId) {
+          await sendToFeishu(chatId, `❌ 处理失败：${err?.message ?? err}\n可发 /kill 重置会话后重试。`).catch(() => {});
+        }
       }
     },
     // 用户进入与机器人的单聊会话时，主动回复一条，验证链路在线
+    // per-chatId 限流 30s：飞书长连接可能重推 access_event,避免连发多条欢迎消息
     "im.chat.access_event.bot_p2p_chat_entered_v1": async (data) => {
       const chatId = data?.chat_id;
       if (!chatId) return;
-      await sendToFeishu(chatId, "嗨 👋 我在呢。直接说你想干啥，我会用本机 opencode 帮你搞定——写代码、改文件、跑命令都行；敏感操作会先问你一下。");
+      const now = Date.now();
+      const last = welcomeSentAt.get(chatId) ?? 0;
+      if (now - last < 30_000) return;
+      welcomeSentAt.set(chatId, now);
+      await sendToFeishu(chatId, "嗨 👋 我在呢。写代码、改文件、跑命令都行；");
     },
   });
 
