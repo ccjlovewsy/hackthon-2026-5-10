@@ -32,7 +32,17 @@ export async function fetchWithRetry(url, options = {}) {
     if (onAbort) externalSignal.addEventListener("abort", onAbort, { once: true });
     const timer = timeoutMs > 0 ? setTimeout(() => ctrl.abort(), timeoutMs) : null;
     try {
-      const res = await fetch(url, { ...fetchOpts, signal: ctrl.signal });
+      // undici(Node 内置 fetch)默认 headersTimeout/bodyTimeout = 300s,会先于本函数的
+      // AbortController(timeoutMs,如 POST /message 的 45min)掐断长阻塞请求,抛
+      // HeadersTimeoutError → "fetch failed";SSE 长连接(/event)空闲 300s 也会被 bodyTimeout
+      // 掐断。这里与 timeoutMs 联动:>0 时给足余量,让 AbortController 先触发(AbortError,
+      // 可控可重试);=0(SSE)时禁用 undici 超时,连接生命周期完全交给 signal/reader。
+      const res = await fetch(url, {
+        ...fetchOpts,
+        signal: ctrl.signal,
+        headersTimeout: timeoutMs > 0 ? timeoutMs + 10_000 : 0,
+        bodyTimeout: timeoutMs > 0 ? timeoutMs + 10_000 : 0,
+      });
       if (timer) clearTimeout(timer);
       if (res.status >= 500) {
         if (attempt < retries) {
