@@ -72,6 +72,8 @@ npm start
 | 命令 | 说明 |
 |---|---|
 | 任意文本 | 当作指令发给 opencode 执行,结果回传 |
+| `https://youtu.be/xxx` | 视频自动总结(字幕直取 → Whisper fallback) |
+| `/file <path>` | 发送本地文件到飞书(限工作目录子树) |
 | `允许` / `同意` / `yes` | 审批通过(支持尾部标点:`允许,` `允许。` `允许!` 均可) |
 | `拒绝` / `不同意` / `no` | 中止该操作 |
 | `总是允许` / `always` | 本次会话内同范围操作自动放行 |
@@ -99,6 +101,9 @@ npm start
 | `FEISHU_LOG_LEVEL` | 否 | `info` | 日志级别(debug/info/warn/error/fatal) |
 | `FEISHU_SESSION_FILE` | 否 | `data/feishu-sessions.json` | chat_id → sessionID 映射 |
 | `FEISHU_SESSION_LOG_DIR` | 否 | `data/session-logs/` | 每会话日志目录 |
+| `YT_DLP_BIN` | 否 | `yt-dlp` | yt-dlp 二进制路径(视频总结用) |
+| `OPENAI_API_KEY` | 否 | - | Whisper API key(无字幕视频 fallback 转写) |
+| `WHISPER_CMD` | 否 | - | 本地 whisper.cpp 二进制(与 OPENAI_API_KEY 二选一) |
 
 ## 项目结构
 

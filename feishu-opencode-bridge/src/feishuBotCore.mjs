@@ -694,6 +694,36 @@ export function createFeishuBotCore(opts) {
       return okText;
     }
 
+    // 路由 0.7:视频 URL → 自动总结
+    const videoMatch = text.match(/^https?:\/\/(?:youtu\.be\/|youtube\.com\/watch\?v=|bilibili\.com\/video\/|v\.youku\.com\/|tv\.sohu\.com\/v\/|www\.bilibili\.com\/video\/)/i);
+    if (videoMatch && summarizeVideo) {
+      return queued(chatId, async () => {
+        const onProgress = (stage, info) => {
+          const stageText = {
+            "fetch-sub": "📥 取字幕中…",
+            "fetch-audio": "📥 无字幕,下载音频中…",
+            "transcribe": "🎙️ 转写中…",
+            "done": "✅ 完成",
+            "error": "❌ 失败",
+          }[stage] || stage;
+          Promise.resolve(reply?.(chatId, `${stageText}${info?.strategy ? ` (${info.strategy})` : ""}`)).catch(() => {});
+        };
+        try {
+          const { transcript, strategy } = await summarizeVideo(text, { onProgress });
+          const instruction = `请总结以下视频字幕,提炼核心要点(分点列出,每点 1-2 句),并标注关键内容出现的大致时间戳。如果字幕不是中文,请翻译为中文后再总结。\n\n---\n${transcript}\n---\n`;
+          return await runInstruction(chatId, instruction, {
+            sessionLabel: `VIDEO: ${text} (${strategy})`,
+          });
+        } catch (err) {
+          const errText = `❌ 视频总结失败:${err?.message ?? err}`;
+          sessionLog?.append(chatId, `ERROR: ${formatErr(err)}`);
+          metrics.messagesFailed++;
+          await Promise.resolve(reply?.(chatId, errText)).catch(() => {});
+          return errText;
+        }
+      });
+    }
+
     // 路由 1：确认授权回复
     const parsed = parseApprovalReply(text);
     if (parsed) {

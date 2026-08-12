@@ -9,6 +9,7 @@ import { createFeishuBotCore, createOpenCodeServer, parseAllowedUsers } from "./
 import { setupGlobalErrorHandler } from "./globalErrorHandler.mjs";
 import { createLogger } from "./logger.mjs";
 import { createHealthServer } from "./healthServer.mjs";
+import { summarizeVideo } from "./videoSummary.mjs";
 
 /**
  * 飞书机器人 → opencode 桥（独立进程）。
@@ -125,6 +126,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     reply: sendToFeishu,
     sendFile: sendFileToFeishu,
     downloadFile: downloadInboxFile,
+    summarizeVideo,
     sendPermissionAsk: (chatId, askText) => sendToFeishu(chatId, askText),
     log: (msg) => logger.info("feishuBotCore", msg),
     sessionLogDir: SESSION_LOG_DIR,

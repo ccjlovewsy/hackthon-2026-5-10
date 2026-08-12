@@ -646,6 +646,104 @@ test("handleMessage: 入站 file 消息 扩展名不允许 → 拒绝", async ()
   fs.rmSync(sessionFile, { force: true });
 });
 
+test("handleMessage: 视频URL → summarizeVideo + 转交 opencode 总结", async () => {
+  const fs = await import("node:fs");
+  const sessionFile = "/tmp/test-sessions-video.json";
+  fs.rmSync(sessionFile, { force: true });
+  const sentInstructions = [];
+  const fakeServer = {
+    onPermissionAsked: null,
+    createSession: async () => "ses_v",
+    sendMessage: async (sid, text) => { sentInstructions.push(text); return "视频要点:1. xxx"; },
+    replyPermission: async () => {},
+  };
+  const replies = [];
+  const fakeSummarize = async (url, opts) => {
+    opts.onProgress?.("fetch-sub", { url });
+    opts.onProgress?.("done", { strategy: "subtitle" });
+    return { title: "测试视频", transcript: "字幕内容", transcriptPath: "/tmp/x.txt", strategy: "subtitle" };
+  };
+  const core = createFeishuBotCore({
+    server: fakeServer,
+    allowedUsers: ["ou_me"],
+    sessionFile,
+    reply: (chatId, text) => replies.push(text),
+    summarizeVideo: fakeSummarize,
+    sendPermissionAsk: () => {},
+    log: () => {},
+  });
+  const ret = await core.handleMessage({
+    message: { message_id: "om_v1", chat_id: "oc_v", content: JSON.stringify({ text: "https://youtu.be/abc123" }), chat_type: "p2p" },
+    sender: { sender_id: { open_id: "ou_me" } },
+  });
+  assert.equal(sentInstructions.length, 1);
+  assert.match(sentInstructions[0], /请总结以下视频字幕/);
+  assert.match(sentInstructions[0], /字幕内容/);
+  assert.ok(replies.some((t) => /取字幕中/.test(t)), "应推送进度");
+  assert.match(ret, /视频要点/);
+  fs.rmSync(sessionFile, { force: true });
+});
+
+test("handleMessage: 视频URL summarizeVideo 抛错 → 回复失败", async () => {
+  const fs = await import("node:fs");
+  const sessionFile = "/tmp/test-sessions-video-err.json";
+  fs.rmSync(sessionFile, { force: true });
+  const fakeServer = {
+    onPermissionAsked: null,
+    createSession: async () => "ses_ve",
+    sendMessage: async () => "ok",
+    replyPermission: async () => {},
+  };
+  const replies = [];
+  const core = createFeishuBotCore({
+    server: fakeServer,
+    allowedUsers: ["ou_me"],
+    sessionFile,
+    reply: (chatId, text) => replies.push(text),
+    summarizeVideo: async () => { throw new Error("yt-dlp 不可用"); },
+    sendPermissionAsk: () => {},
+    log: () => {},
+  });
+  const ret = await core.handleMessage({
+    message: { message_id: "om_v2", chat_id: "oc_v2", content: JSON.stringify({ text: "https://www.bilibili.com/video/BV1xx" }), chat_type: "p2p" },
+    sender: { sender_id: { open_id: "ou_me" } },
+  });
+  assert.match(ret, /视频总结失败/);
+  assert.match(ret, /yt-dlp 不可用/);
+  fs.rmSync(sessionFile, { force: true });
+});
+
+test("handleMessage: 普通URL(非视频站点) → 不走 videoSummary,当普通指令处理", async () => {
+  const fs = await import("node:fs");
+  const sessionFile = "/tmp/test-sessions-novideo.json";
+  fs.rmSync(sessionFile, { force: true });
+  const sentInstructions = [];
+  const fakeServer = {
+    onPermissionAsked: null,
+    createSession: async () => "ses_nv",
+    sendMessage: async (sid, text) => { sentInstructions.push(text); return "已处理"; },
+    replyPermission: async () => {},
+  };
+  let summarizeCalled = false;
+  const core = createFeishuBotCore({
+    server: fakeServer,
+    allowedUsers: ["ou_me"],
+    sessionFile,
+    reply: () => {},
+    summarizeVideo: async () => { summarizeCalled = true; return { transcript: "", strategy: "" }; },
+    sendPermissionAsk: () => {},
+    log: () => {},
+  });
+  await core.handleMessage({
+    message: { message_id: "om_nv1", chat_id: "oc_nv", content: JSON.stringify({ text: "https://example.com/some-page" }), chat_type: "p2p" },
+    sender: { sender_id: { open_id: "ou_me" } },
+  });
+  assert.equal(summarizeCalled, false, "非视频站点 URL 不应调 summarizeVideo");
+  assert.equal(sentInstructions.length, 1);
+  assert.equal(sentInstructions[0], "https://example.com/some-page");
+  fs.rmSync(sessionFile, { force: true });
+});
+
 test("close: 停止 SSE 重连循环", async () => {
   const originalFetch = globalThis.fetch;
   let fetchCalls = 0;
