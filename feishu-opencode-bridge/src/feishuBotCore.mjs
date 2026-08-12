@@ -29,6 +29,7 @@ const POLL_TIMEOUT_MS = 15_000;                  // 轮询 GET /message(原 5000
 const POLL_RETRIES = 3;                          // 轮询重试(原 retries: 1)
 const CREATE_SESSION_TIMEOUT_MS = 15_000;        // createSession(原 5000)
 import { isPathSafe, extractFileReferences, parseFilePathCommand, validateExtension } from "./fileTransfer.mjs";
+import { chunkTranscript } from "./videoSummary.mjs";
 
 // ---------- 纯函数 ----------
 
@@ -430,7 +431,7 @@ function saveSessionMap(file, map) {
   * @param {string} opts.sessionFile 会话映射持久化文件路径
   * @param {(chatId: string, text: string) => Promise<void>|void} opts.reply 回复回调
   * @param {(chatId: string, absPath: string) => Promise<void>|void} [opts.sendFile] 发送文件回调(飞书 file 消息)
- * @param {(messageId: string, fileName: string) => Promise<string>} [opts.downloadFile] 下载入站文件回调,返回落地 absPath
+ * @param {(messageId: string, fileKey: string, fileName: string) => Promise<string>} [opts.downloadFile] 下载入站文件回调,返回落地 absPath
  * @param {(url: string, opts: object) => Promise<object>} [opts.summarizeVideo] 视频总结函数
  * @param {(chatId: string, askText: string, requestID: string) => Promise<void>|void} opts.sendPermissionAsk 权限审查请求回调
   * @param {string} [opts.rootDir] 工作目录根(路径安全校验用,默认 process.cwd())
@@ -713,8 +714,9 @@ export function createFeishuBotCore(opts) {
 
     // 路由 0.7:视频 URL → 自动总结
     // 从文本任意位置提取首个 URL(用户发分享口令,如"【标题】 https://b23.tv/xxx",URL 不在开头)
+    // 剥掉尾部中文/半角标点:分享口令常以句号/逗号结尾,否则 URL 会带尾随标点传给 yt-dlp 导致下载失败
     const urlMatch = text.match(/https?:\/\/[^\s]+/i);
-    const videoUrl = urlMatch ? urlMatch[0] : null;
+    const videoUrl = urlMatch ? urlMatch[0].replace(/[。，,；;！!]+$/, "") : null;
     // 视频域名白名单(含 bilibili 短链 b23.tv;短链直接交 yt-dlp,其内置跟随重定向)
     const VIDEO_URL_RE = /^(?:https?:\/\/)?(?:youtu\.be\/|youtube\.com\/watch\?v=|youtube\.com\/shorts\/|bilibili\.com\/video\/|www\.bilibili\.com\/video\/|b23\.tv\/|v\.youku\.com\/|tv\.sohu\.com\/v\/)/i;
     if (videoUrl && VIDEO_URL_RE.test(videoUrl) && summarizeVideo) {
@@ -731,9 +733,27 @@ export function createFeishuBotCore(opts) {
         };
         try {
           const { transcript, strategy } = await summarizeVideo(videoUrl, { onProgress });
-          const instruction = `请总结以下视频字幕,提炼核心要点(分点列出,每点 1-2 句),并标注关键内容出现的大致时间戳。如果字幕不是中文,请翻译为中文后再总结。\n\n---\n${transcript}\n---\n`;
-          return await runInstruction(chatId, instruction, {
-            sessionLabel: `VIDEO: ${videoUrl} (${strategy})`,
+          // 长字幕(> CHUNK_SIZE=6000 字符)分块:每块先独立总结,再合并成总摘要,
+          // 避免整段字幕超出 opencode 上下文上限(chunkTranscript 按句号切块)
+          const baseInstr = "请总结以下视频字幕,提炼核心要点(分点列出,每点 1-2 句),并标注关键内容出现的大致时间戳。如果字幕不是中文,请翻译为中文后再总结。";
+          const chunks = chunkTranscript(transcript);
+          if (chunks.length === 1) {
+            return await runInstruction(chatId, `${baseInstr}\n\n---\n${transcript}\n---\n`, {
+              sessionLabel: `VIDEO: ${videoUrl} (${strategy})`,
+            });
+          }
+          const partSummaries = [];
+          for (let i = 0; i < chunks.length; i++) {
+            const partText = await runInstruction(
+              chatId,
+              `请总结以下视频字幕第 ${i + 1}/${chunks.length} 部分(位于视频中段),提炼核心要点(分点列出,每点 1-2 句)。如果字幕不是中文,请翻译为中文后再总结。\n\n---\n${chunks[i]}\n---\n`,
+              { sessionLabel: `VIDEO-PART ${i + 1}/${chunks.length}: ${videoUrl} (${strategy})` },
+            );
+            partSummaries.push(partText);
+          }
+          const mergeInstr = `以下是同一视频按字幕长度切分后的各段总结,请综合成一份完整、连贯、去重的总摘要,按主题分点列出核心要点。\n\n${partSummaries.map((s, i) => `【第 ${i + 1} 段】\n${s}`).join("\n\n")}`;
+          return await runInstruction(chatId, mergeInstr, {
+            sessionLabel: `VIDEO-MERGE: ${videoUrl} (${strategy})`,
           });
         } catch (err) {
           // yt-dlp 未安装时给针对性提示(ENOENT = spawn 找不到二进制)

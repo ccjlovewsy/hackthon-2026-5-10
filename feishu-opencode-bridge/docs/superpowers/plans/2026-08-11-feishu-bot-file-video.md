@@ -65,12 +65,12 @@
 | `src/feishuBot.mjs` | 桥入口:启动 lark WSClient + opencode serve + 健康端点 + 文件回调注入 | 修改 |
 | `src/feishuBotCore.mjs` | 桥核心纯逻辑(不依赖 lark SDK):新增 `/file` 路由 + 入站文件路由 + 出站自动检测 | 修改 |
 | `src/fetchWithRetry.mjs` | fetch + 超时重试(无改动) | 不变 |
-| `src/videoSummary.mjs` | 视频总结策略链:字幕直取 → yt-dlp 字幕 → yt-dlp 音频 + Whisper → opencode 总结 | **新建** |
-| `src/fileTransfer.mjs` | 文件路径安全 + 出站路径检测 + 入站扩展名校验(纯函数,可单测) | **新建** |
+| `src/videoSummary.mjs` | 视频总结策略链:字幕直取 → yt-dlp 字幕 → yt-dlp 音频 + Whisper → opencode 总结 | ✅ 已存在 |
+| `src/fileTransfer.mjs` | 文件路径安全 + 出站路径检测 + 入站扩展名校验(纯函数,可单测) | ✅ 已存在 |
 | `tests/feishuBotCoreMetrics.test.mjs` | 已有,不变(本 plan 新增测试全部加在 `feishuBot.test.mjs`) | 不变 |
 | `tests/feishuBot.test.mjs` | 已有,补错误回复 + `/file` 路由 + 出站自动检测 + 入站文件 + 视频 URL 测试 | 修改 |
-| `tests/fileTransfer.test.mjs` | `fileTransfer` 纯函数测试 | **新建** |
-| `tests/videoSummary.test.mjs` | `videoSummary` 策略链测试(mock 子进程 + mock fetch) | **新建** |
+| `tests/fileTransfer.test.mjs` | `fileTransfer` 纯函数测试 | ✅ 已存在 |
+| `tests/videoSummary.test.mjs` | `videoSummary` 策略链测试(mock 子进程 + mock fetch) | ✅ 已存在 |
 | `send-file.mjs` | 一次性 CLI 脚本,保留(运维用) | 不变 |
 | `.env.example` | 新增 Issue 3 的环境变量说明 | 修改 |
 
@@ -214,7 +214,7 @@ test("createMessageHandler: core 抛错时 reply 收到 ❌ 处理失败", async
 
 Run: `npm test`
 
-Expected: 全部 PASS(当前基线 54 个,新增 2 个 = 56 个)。
+Expected: 全部 PASS。✅ 已落地:当前全量 83 个测试 PASS(79 基线 + 本轮新增 4 个:URL 标点剥离、长字幕分块、时长校验×2)。
 
 - [ ] **Step 5: 重启桥进程让改动生效**
 
@@ -235,7 +235,7 @@ launchctl load ~/Library/LaunchAgents/com.user.feishu-opencode-bridge.plist
 
 ```bash
 git add src/feishuBot.mjs src/feishuBotCore.mjs tests/fetchWithRetry.test.mjs tests/feishuBot.test.mjs send-file.mjs
-git commit -m "fix(feishu-bot): POST /message timeout 5s→30s + surface abort error to user
+git commit -m "fix(feishu-bot): POST /message timeout 5s→45min(同步阻塞) + retries:0 + surface abort error to user
 
 抽 POST_MESSAGE_TIMEOUT_MS 常量(便于以后调);补慢响应回归测试(8s
 响应在 30s 超时下不 abort);抽 createMessageHandler 使错误回复可单测,
@@ -534,15 +534,11 @@ return finalText;
 - [ ] **Step 4: 跑测试**
 
 Run: `npm test`
-Expected: 新增 3 个 case PASS,原 56 个(Task 1 后基线)不回归。
+Expected: 新增 3 个 case PASS,原 56 个(Task 1 后基线)不回归。✅ 已落地:全量 83 个 PASS。
 
 - [ ] **Step 5: `.gitignore` 加 `tmp/`**
 
-当前 `.gitignore` 没有 `tmp/`,不补的话视频下载(最高 100MB)和入站文件会被 git 跟踪。在 `.gitignore` 追加一行:
-
-```
-tmp/
-```
+当前 `.gitignore` 已有 `tmp/` 相关条目(视频下载、入站文件不会被 git 跟踪,✅ 已确认含 `tmp/frontend-upload-*.md` 等模式)。若以后新增落地目录不在 tmp/ 下,记得补 `.gitignore`。
 
 - [ ] **Step 6: 手测**
 
@@ -620,10 +616,10 @@ assert.match(sent[0], /a\.html/);
 
 ```js
 // case B:content 无 file_name(飞书常见)→ 不拒绝,fallback 命名,downloadFile 仍被调
-// case C:未授权用户发 file 消息 → 被拒,downloadFile 不被调(分支自带授权校验)
+// case C:未授权用户发 file 消息 → 被拒,downloadFile 不被调(由统一授权检查拦截)
 ```
 
-> 注意:file 分支位于统一授权检查之前(见 Step 3),case C 是安全回归测试,**必须写**。
+> ✅ **已落地,顺序与最初设计不同(更安全)**:file 分支在统一授权检查**之后**,无需自带授权校验(见 Step 3 说明),case C 仍是安全回归测试,**必须保留**。
 
 - [ ] **Step 2: 在 `feishuBot.mjs` 加 `downloadInboxFile`**
 
@@ -665,16 +661,16 @@ opts 解构加 `downloadFile?`(见 Task 3 Step 3 已加 `rootDir`)。
 
 ```
 原顺序: metrics → isDuplicate → extractMessageText → if(!text) return → chatId → if(!chatId) → 授权 → 路由
-新顺序: metrics → isDuplicate → chatId → if(!chatId) → 【路由 -1: file 分支(自带授权校验)】→ extractMessageText → if(!text) return → 授权(文本消息) → 路由
+✅ 实际落地顺序: metrics → isDuplicate → extractMessageText → chatId → if(!chatId) → 授权(文本/file 统一) → 【路由 -1: file 分支】→ if(!text) return → 路由
 ```
 
-即把 `const chatId = message.chat_id; if (!chatId) {...}` 两行**提前**到 `extractMessageText` 之前,file 分支插在 chatId 检查之后、`extractMessageText` 之前。**file 分支位于统一授权检查之前,必须自带 `isUserAllowed` 校验,否则未授权用户可拖文件触发 opencode 处理。**
+✅ **已落地(顺序与最初设计不同,更安全)**:file 分支位于**统一授权检查之后**,因此**不需要自带 `isUserAllowed` 校验**——授权统一收口,未授权用户发 file 同样被拒(case C 测试通过)。注意:不要按旧描述"改回"成自带授权版本(会造成双重校验混乱);真正必须保证的是 file 分支在 `if (!text) return undefined;` **之前**(file 消息无 text 字段,`extractMessageText` 返回 `""`)。
 
 ```js
-// 路由 -1:入站文件消息(必须在 extractMessageText 之前——file 消息无 text 字段,
-// extractMessageText 返回 "",后面的 `if (!text) return undefined` 会提前返回)
+// 路由 -1:入站文件消息(必须在 if(!text) return 之前——file 消息无 text 字段,
+// extractMessageText 返回 "",`if (!text) return undefined` 在其后会提前返回)
+// ✅ 已落地:本分支位于统一授权检查之后,无需自带授权校验(授权统一收口,见 Step 3 说明)
 if (message.message_type === "file") {
-  // 本分支位于统一授权检查之前,必须自带授权校验(安全回归测试 case C)
   if (!isUserAllowed(sender, allowedUsers)) {
     log(`拒绝未授权用户文件消息: chat=${chatId}`);
     const denied = `🚫 未授权：你不在 OPENCODE_ALLOWED_USERS 中。`;
@@ -725,7 +721,7 @@ if (message.message_type === "file") {
 }
 ```
 
-> 注:`runInstruction` 在 Task 5 抽出,Task 4 先复制粘贴路由 2 的逻辑。
+> 注:✅ **已落地**:`runInstruction` 已直接抽好(见 `feishuBotCore.mjs`),Task 5 已并入 Task 4 实现,路由 -1(:651)与路由 2(:781)都调用它,本 Task 无需再"复制粘贴"。
 
 - [ ] **Step 4: 跑测试**
 
@@ -749,13 +745,15 @@ git commit -m "feat(feishu-bot): 入站文件消息 - 下载到 tmp/feishu-inbox
 - downloadFile 回调注入(im.messageResource.get stream → pipeline 落盘)
 - 路由 -1:file 类型消息 → 下载 → 包装成 '处理这个文件: <absPath>' 指令
 - 下载接口 path 必须带 message_id + file_key(修复 request miss file_key path argument)
-- 分支插在 extractMessageText 之前(file 消息无 text 字段)+ 自带授权校验
+- 分支在 `if (!text) return` 之前(file 消息无 text 字段);授权统一收口,分支不自带校验(见 Step 3 说明)
 - 文件名 basename 防越权;有扩展名才做白名单校验(content 可能无 file_name)"
 ```
 
 ---
 
 ## Task 5: 重构 — 抽 `runInstruction` helper(消除 Task 3/4 重复代码)
+
+> ✅ **已并入 Task 4 实现**:当前代码 `feishuBotCore.mjs:519` 已直接抽好 `runInstruction`,路由 -1 与路由 2 均调用它。本 Task 为历史步骤,无需重复操作;以下内容仅作记录。
 
 **Files:**
 - Modify: `src/feishuBotCore.mjs`
@@ -884,38 +882,30 @@ case D:全部失败 → 抛错,`onProgress("error", err)` 被调。
 ```js
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync, readdirSync, statSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { EventEmitter } from "node:events";
-import { summarizeVideo, chunkTranscript, __setSpawn } from "../src/videoSummary.mjs";
+import { summarizeVideo, chunkTranscript, _setRunCmdOverride } from "../src/videoSummary.mjs";
 
 test("summarizeVideo: 字幕直取成功(策略 subtitle)", async () => {
   const tmpRoot = mkdtempSync(join(tmpdir(), "vs-"));
   try {
-    // ⚠️ 不能 monkey-patch import("node:child_process").spawn——ESM 命名空间只读,
-    // 赋值会抛 "Cannot assign to read only property 'spawn'"。videoSummary 提供
-    // __setSpawn 注入点(内部 _spawn 变量),测试结束后 __setSpawn() 恢复默认。
-    __setSpawn(function (cmd, args) {
+    // ✅ 实际实现用 `_setRunCmdOverride`(在 runCmd 的 Promise 层 mock,比 mock spawn
+    // EventEmitter 更简单)。videoSummary 内部 runCmd 先查 `_runCmdOverride`,命中则直接
+    // 返回其结果,不再 spawn;测试结束 `_setRunCmdOverride(null)` 恢复默认。
+    _setRunCmdOverride((cmd, args) => {
       if (cmd === "yt-dlp" && args.includes("--skip-download")) {
         const subPath = join(tmpRoot, "abc.txt");
-        writeFileSync(subPath, "这是字幕内容,长度足够通过最小阈值检查。");
-        const fake = new EventEmitter();
-        fake.stdout = new EventEmitter();
-        fake.stderr = new EventEmitter();
-        setTimeout(() => {
-          fake.stdout.emit("data", "视频标题");
-          fake.emit("close", 0);
-        }, 10);
-        return fake;
+        writeFileSync(subPath, "这是字幕内容,长度足够通过最小阈值检查,需要超过五十字符才能通过验证。这是字幕内容,长度足够通过最小阈值检查。");
+        return Promise.resolve({ code: 0, stdout: "视频标题\n", stderr: "" });
       }
-      throw new Error(`unexpected spawn: ${cmd} ${args?.join(" ")}`);
+      return Promise.resolve({ code: 1, stdout: "", stderr: "unknown" });
     });
     const r = await summarizeVideo("https://youtu.be/abc", { downloadDir: tmpRoot });
     assert.equal(r.strategy, "subtitle");
     assert.ok(r.transcript.length > 0);
   } finally {
-    __setSpawn(); // 恢复默认 spawn(必须,否则影响其他测试)
+    _setRunCmdOverride(null); // 恢复默认(必须,否则影响其他测试)
     rmSync(tmpRoot, { recursive: true, force: true });
   }
 });
@@ -927,7 +917,7 @@ test("chunkTranscript: 按句号切块", () => {
 });
 ```
 
-(case B/C/D 同理:case B 需 `__setSpawn` 处理 `-f bestaudio` 分支并 mock `globalThis.fetch`(Whisper API);case C 需临时设 `WHISPER_CMD`;case D 让 fake spawn 抛错。注意:case B/C 里 `WHISPER_CMD`/`OPENAI_API_KEY` 是模块加载时读取的环境变量,测试需在 import 前设 `process.env` 或给 `summarizeVideo` 传 `opts.llm`——见 Step 2 实现建议优先用 `opts.llm` 传参,避免环境变量时序问题)
+(case B/C/D 同理:case B 需 `_setRunCmdOverride` 处理 `-f bestaudio` 分支并 mock `globalThis.fetch`(Whisper API);case C 需临时设 `WHISPER_CMD`;case D 让 override 返回 `code: 1` 抛错。`OPENAI_API_KEY` 是模块加载时读取的环境变量,但 `summarizeVideo` 支持 `opts.llm` 传参——测试一律用 `opts.llm` 传 API key/baseUrl/model,避免环境变量时序问题)
 
 - [ ] **Step 2: 实现 `src/videoSummary.mjs`**
 
@@ -936,11 +926,12 @@ import { spawn } from "node:child_process";
 import { mkdirSync, existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join, basename } from "node:path";
 
-// 测试注入点:ESM 命名空间只读,不能 monkey-patch import("node:child_process").spawn,
-// 因此 runCmd 通过内部变量 _spawn 调用;测试用 __setSpawn(fn) 替换,__setSpawn() 恢复默认。
-let _spawn = spawn;
-export function __setSpawn(fn) {
-  _spawn = fn ?? spawn;
+// ✅ 实际实现(与最初设计不同):runCmd 通过内部 `_runCmdOverride` 变量,
+// 测试用 `_setRunCmdOverride(fn)` 在 Promise 层替换(返回 { code, stdout, stderr }),
+// `_setRunCmdOverride(null)` 恢复默认——比 mock spawn EventEmitter 更简单。
+let _runCmdOverride = null;
+export function _setRunCmdOverride(fn) {
+  _runCmdOverride = fn;
 }
 
 const DEFAULT_DOWNLOAD_DIR = "tmp/videos/";
@@ -1053,8 +1044,9 @@ async function transcribeWithLocalWhisper(audioPath, whisperCmd) {
 }
 
 function runCmd(cmd, args) {
+  if (_runCmdOverride) return _runCmdOverride(cmd, args); // ✅ 测试注入点
   return new Promise((resolve) => {
-    const child = _spawn(cmd, args, { stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn(cmd, args, { stdio: ["ignore", "pipe", "pipe"] });
     let stdout = "";
     let stderr = "";
     child.stdout.on("data", (d) => (stdout += d));
@@ -1260,7 +1252,7 @@ git commit -m "feat(feishu-bot): 视频URL自动总结 - 字幕优先 + Whisper 
 - [ ] **Step 1: 跑全测**
 
 Run: `cd feishu-opencode-bridge && npm test`
-Expected: 全 PASS(基线 54 + 本 plan 新增 ≈ 66+ tests)
+Expected: 全 PASS(✅ 已落地:实际 83 个)
 
 - [ ] **Step 2: 重启桥进程**
 
@@ -1301,7 +1293,7 @@ git commit -m "docs(feishu-bot): 文件收发 + 视频总结 + abort 修复 READ
 **目标:** 8 个 Task 全部完成后,按功能逐个跑 node test 验收——每个功能对应独立测试文件/测试组,明确 case 清单、关键断言与预期通过数。全部绿了才进 Task 8 的手测清单。
 
 > **运行约定:** 全部在 `feishu-opencode-bridge/` 目录下执行。单文件:`node --test tests/<file>.test.mjs`;全量:`npm test`(等价 `node --test tests/*.test.mjs`)。
-> **基线:** 当前 54 个测试全 PASS。本 plan 新增 ~21 个(2+4+3+3+5+4),完成后全量 ≈ 75 个。
+> **基线:** ✅ 已落地:当前全量 83 个测试 PASS(79 基线 + 本轮新增 4 个:URL 标点剥离、长字幕分块、时长校验×2)。
 > **执行顺序:** 功能 2 → 1 → 3 → 4 → 5 → 6 → 7;每过一档再进下一档,任何 FAIL 先修再继续。
 
 - [ ] **功能 1:Issue 1 — abort 修复(超时常量 + 全面放宽 + 错误回复)**
@@ -1318,7 +1310,7 @@ git commit -m "docs(feishu-bot): 文件收发 + 视频总结 + abort 修复 READ
 
 - [ ] **功能 2:fileTransfer 纯函数(路径安全 / 出站检测 / /file 解析)**
 
-文件:`tests/fileTransfer.test.mjs`(新建,4 个)
+文件:`tests/fileTransfer.test.mjs`(✅ 已存在,4 个)
 运行:`node --test tests/fileTransfer.test.mjs`
 
 | case | 断言要点 |
@@ -1352,13 +1344,13 @@ git commit -m "docs(feishu-bot): 文件收发 + 视频总结 + abort 修复 READ
 |---|---|
 | A:file 消息 → `downloadFile` 被调 | **必须断言 `downloadFile` 收到 `fileKey === "fk_x"`**(实测 `request miss file_key path argument` 回归);指令含 `处理这个文件:` 与 `a.html` |
 | B:content 无 `file_name` | 不拒绝;fallback 命名;`downloadFile` 仍被调一次 |
-| C:未授权用户发 file 消息 | 被拒(`🚫 未授权`);`downloadFile` 不被调(分支自带授权校验的安全回归) |
+| C:未授权用户发 file 消息 | 被拒(`🚫 未授权`);`downloadFile` 不被调(统一授权检查拦截的安全回归) |
 
 预期:3 PASS。case A 的 fileKey 断言是本次修复的防回归核心。
 
 - [ ] **功能 5:videoSummary 策略链(字幕 / Whisper API / 本地 whisper / 全失败)**
 
-文件:`tests/videoSummary.test.mjs`(新建,5 个)
+文件:`tests/videoSummary.test.mjs`(✅ 已存在,8 个:5 策略 + chunkTranscript×2 + 时长校验×2)
 运行:`node --test tests/videoSummary.test.mjs`
 
 | case | 断言要点 |
@@ -1369,7 +1361,7 @@ git commit -m "docs(feishu-bot): 文件收发 + 视频总结 + abort 修复 READ
 | D:全部失败 | `summarizeVideo` 抛错;`onProgress("error", err)` 被调 |
 | `chunkTranscript: 按句号切块` | 长文本切成 ≥2 块 |
 
-预期:5 PASS。注意:spawn 一律经 `__setSpawn` 注入(ESM 命名空间只读,禁止 `import("node:child_process").spawn = ...`);case B/C 用 `opts.llm` 传参而非改 `process.env`(避免模块加载时读环境变量的时序问题)。
+预期:8 PASS。✅ 注意:spawn 一律经 `_setRunCmdOverride` 注入(Promise 层 mock,勿用 `import("node:child_process").spawn`——ESM 命名空间只读);case B/C 用 `opts.llm` 传参而非改 `process.env`(避免模块加载时读环境变量的时序问题)。
 
 - [ ] **功能 6:视频 URL 识别 + 总结路由(含 b23.tv / 标题前缀)**
 
@@ -1383,7 +1375,7 @@ git commit -m "docs(feishu-bot): 文件收发 + 视频总结 + abort 修复 READ
 | C:`summarizeVideo` 抛错 | `reply` 含 `❌ 视频总结失败`;抛 `ENOENT` 时含"请先安装 yt-dlp" |
 | D:普通网页 URL | 不走 videoSummary;落路由 2 当普通指令 |
 
-预期:4 PASS。case B 是本次 b23.tv 修复的防回归核心。
+预期:4 PASS。case B 是本次 b23.tv 修复的防回归核心。✅ 已落地:URL 路由相关测试实际 ≥6 个(另含 URL 尾部标点剥离、长字幕分块接入)。
 
 - [ ] **功能 7:重构不回归(runInstruction 抽取)**
 
@@ -1393,7 +1385,7 @@ git commit -m "docs(feishu-bot): 文件收发 + 视频总结 + abort 修复 READ
 - [ ] **全量验收**
 
 运行:`npm test`
-预期:全 PASS,总数 ≈ 75(54 基线 + 21 新增)。
+预期:全 PASS(✅ 已落地:实际 83 个)
 
 ---
 
@@ -1414,7 +1406,7 @@ git commit -m "docs(feishu-bot): 文件收发 + 视频总结 + abort 修复 READ
 | 视频 URL 识别(含 b23.tv 短链/标题前缀) | 7 | feishuBot URL 路由测试 case B | 发 b23.tv 分享口令触发总结 |
 | 视频总结进度推送 | 7 | feishuBot URL 路由测试 | 飞书看到 `📥 取字幕中…` 等 |
 | 重构不回归 | 5 | 全测 PASS | / |
-| 功能验收 node test(按功能逐个跑) | 9 | 各功能测试文件(见 Task 9 case 清单) | `npm test` 全绿,总数 ≈ 75 |
+| 功能验收 node test(按功能逐个跑) | 9 | 各功能测试文件(见 Task 9 case 清单) | `npm test` 全绿,✅ 实际 83 个 |
 
 ---
 

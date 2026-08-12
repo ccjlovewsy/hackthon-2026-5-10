@@ -867,6 +867,64 @@ test("handleMessage: 分享口令文本(标题在前 + b23.tv 短链)→ 识别�
   fs.rmSync(sessionFile, { force: true });
 });
 
+test("handleMessage: URL 尾部带中文句号 → 剥离标点后再交 summarizeVideo", async () => {
+  const fs = await import("node:fs");
+  const sessionFile = "/tmp/test-sessions-video-punct.json";
+  fs.rmSync(sessionFile, { force: true });
+  const receivedUrls = [];
+  const core = createFeishuBotCore({
+    server: { onPermissionAsked: null, createSession: async () => "ses_p", sendMessage: async () => "总结完成", replyPermission: async () => {} },
+    allowedUsers: ["ou_me"],
+    sessionFile,
+    reply: () => {},
+    summarizeVideo: async (url) => { receivedUrls.push(url); return { transcript: "字幕", strategy: "subtitle" }; },
+    sendPermissionAsk: () => {},
+    log: () => {},
+  });
+  const ret = await core.handleMessage({
+    message: { message_id: "om_p1", chat_id: "oc_p",
+               content: JSON.stringify({ text: "【视频】 https://b23.tv/w7n1hl5。" }), chat_type: "p2p" },
+    sender: { sender_id: { open_id: "ou_me" } },
+  });
+  assert.equal(receivedUrls.length, 1);
+  assert.equal(receivedUrls[0], "https://b23.tv/w7n1hl5", "URL 不应带尾部中文句号");
+  assert.match(ret, /总结完成/);
+  fs.rmSync(sessionFile, { force: true });
+});
+
+test("handleMessage: 长字幕(>6000字符)→ 分块独立总结 + 合并总摘要", async () => {
+  const fs = await import("node:fs");
+  const sessionFile = "/tmp/test-sessions-video-chunk.json";
+  fs.rmSync(sessionFile, { force: true });
+  const sent = [];
+  const core = createFeishuBotCore({
+    server: {
+      onPermissionAsked: null,
+      createSession: async () => "ses_c",
+      // 记录每次发给 opencode 的指令,并返回模拟的总结文本
+      sendMessage: async (_sessionId, text) => { sent.push(text); return `块${sent.length}总结`; },
+      replyPermission: async () => {},
+    },
+    allowedUsers: ["ou_me"],
+    sessionFile,
+    reply: () => {},
+    // 9000 字符字幕(> CHUNK_SIZE 6000)→ 应切 2 块
+    summarizeVideo: async () => ({ transcript: "内容。".repeat(3000), strategy: "subtitle" }),
+    sendPermissionAsk: () => {},
+    log: () => {},
+  });
+  const ret = await core.handleMessage({
+    message: { message_id: "om_c1", chat_id: "oc_c",
+               content: JSON.stringify({ text: "https://youtu.be/abc" }), chat_type: "p2p" },
+    sender: { sender_id: { open_id: "ou_me" } },
+  });
+  assert.ok(sent.length >= 3, `长字幕应分块总结+合并(2块+1合并),实际 ${sent.length} 次 sendMessage`);
+  assert.match(sent[0], /第 1\/2 部分/, "第 1 次调用应是分块总结指令");
+  assert.match(sent[sent.length - 1], /总摘要/, "最后一次调用应是合并总摘要指令");
+  assert.equal(ret, `块${sent.length}总结`, "最终返回合并指令的结果");
+  fs.rmSync(sessionFile, { force: true });
+});
+
 test("handleMessage: summarizeVideo 抛 ENOENT(yt-dlp 未装)→ 提示安装", async () => {
   const fs = await import("node:fs");
   const sessionFile = "/tmp/test-sessions-video-enoent.json";

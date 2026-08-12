@@ -110,6 +110,61 @@ test("chunkTranscript: 长文本按句号切", () => {
   assert.ok(chunks.length >= 2, `expected >=2 chunks, got ${chunks.length}`);
 });
 
+test("summarizeVideo: 超过 VIDEO_MAX_DURATION_SEC → --match-filter 拒绝并给出明确错误", async () => {
+  const tmpRoot = mkdtempSync(join(tmpdir(), "vs-"));
+  const origMax = process.env.VIDEO_MAX_DURATION_SEC;
+  process.env.VIDEO_MAX_DURATION_SEC = "3600";
+  try {
+    let sawMatchFilter = false;
+    _setRunCmdOverride((cmd, args) => {
+      if (args.includes("--match-filter")) sawMatchFilter = true;
+      if (cmd === "yt-dlp" && args.includes("--skip-download")) {
+        return Promise.resolve({ code: 1, stdout: "", stderr: "no subs" }); // 无字幕 → fallback 音频
+      }
+      if (cmd === "yt-dlp") {
+        // 模拟 yt-dlp 因 --match-filter 拒绝超长视频(真实 stderr 含 "does not match filter")
+        return Promise.resolve({ code: 1, stdout: "", stderr: "The video does not match filter\nERROR: 视频超长" });
+      }
+      return Promise.resolve({ code: 1, stdout: "", stderr: "" });
+    });
+    await assert.rejects(
+      summarizeVideo("https://youtu.be/abc", { downloadDir: tmpRoot }),
+      (err) => /时长超过上限 3600 秒/.test(err.message)
+    );
+    assert.ok(sawMatchFilter, "yt-dlp 命令应带 --match-filter");
+  } finally {
+    _setRunCmdOverride(null);
+    if (origMax) process.env.VIDEO_MAX_DURATION_SEC = origMax;
+    else delete process.env.VIDEO_MAX_DURATION_SEC;
+    rmSync(tmpRoot, { recursive: true, force: true });
+  }
+});
+
+test("summarizeVideo: 未配置 VIDEO_MAX_DURATION_SEC → 不传 --match-filter", async () => {
+  const tmpRoot = mkdtempSync(join(tmpdir(), "vs-"));
+  const origMax = process.env.VIDEO_MAX_DURATION_SEC;
+  delete process.env.VIDEO_MAX_DURATION_SEC;
+  try {
+    let sawMatchFilter = false;
+    _setRunCmdOverride((cmd, args) => {
+      if (args.includes("--match-filter")) sawMatchFilter = true;
+      if (cmd === "yt-dlp" && args.includes("--skip-download")) {
+        const subPath = join(tmpRoot, "abc.txt");
+        writeFileSync(subPath, "这是字幕内容,长度足够通过最小阈值检查,需要超过五十字符才能通过验证。这是字幕内容,长度足够通过最小阈值检查。");
+        return Promise.resolve({ code: 0, stdout: "视频标题\n", stderr: "" });
+      }
+      return Promise.resolve({ code: 1, stdout: "", stderr: "unknown" });
+    });
+    const r = await summarizeVideo("https://youtu.be/abc", { downloadDir: tmpRoot });
+    assert.equal(r.strategy, "subtitle");
+    assert.equal(sawMatchFilter, false, "未配置时长上限时不应传 --match-filter");
+  } finally {
+    _setRunCmdOverride(null);
+    if (origMax) process.env.VIDEO_MAX_DURATION_SEC = origMax;
+    rmSync(tmpRoot, { recursive: true, force: true });
+  }
+});
+
 test("summarizeVideo: 无字幕 + WHISPER_CMD → 本地 whisper(策略 whisper-local)", async () => {
   const tmpRoot = mkdtempSync(join(tmpdir(), "vs-"));
   try {
