@@ -7,6 +7,15 @@
  * - 若调用方传 signal 并主动 abort,立即传播不重试(非瞬时错误)
  * - 外部 signal 的监听器每次调用注册、结束即移除,重连循环中不累积
  */
+import { Agent } from "undici";
+
+// 连接层超时禁用(headersTimeout/bodyTimeout = 0):实测 Node 全局 fetch 的 RequestInit
+// **不识别** headersTimeout/bodyTimeout(传了也无效),undici 默认 300s 会先于 AbortController
+// (如 POST /message 的 45min)掐断长阻塞请求,抛 HeadersTimeoutError → "fetch failed";
+// SSE 长连接(/event)空闲 300s 也会被 bodyTimeout 掐断。唯一生效途径是 undici Agent
+// dispatcher:0 = 禁用,连接生命周期完全交给 AbortController(timeoutMs)或 reader。
+const DISPATCHER = new Agent({ headersTimeout: 0, bodyTimeout: 0 });
+
 const DEFAULT_TIMEOUT_MS = 10_000;
 const DEFAULT_RETRIES = 2;
 const DEFAULT_RETRY_DELAY_MS = 500;
@@ -32,16 +41,13 @@ export async function fetchWithRetry(url, options = {}) {
     if (onAbort) externalSignal.addEventListener("abort", onAbort, { once: true });
     const timer = timeoutMs > 0 ? setTimeout(() => ctrl.abort(), timeoutMs) : null;
     try {
-      // undici(Node 内置 fetch)默认 headersTimeout/bodyTimeout = 300s,会先于本函数的
-      // AbortController(timeoutMs,如 POST /message 的 45min)掐断长阻塞请求,抛
-      // HeadersTimeoutError → "fetch failed";SSE 长连接(/event)空闲 300s 也会被 bodyTimeout
-      // 掐断。这里与 timeoutMs 联动:>0 时给足余量,让 AbortController 先触发(AbortError,
-      // 可控可重试);=0(SSE)时禁用 undici 超时,连接生命周期完全交给 signal/reader。
+      // 业务超时由 AbortController(timeoutMs)统一控制;连接层超时已通过 Agent
+      // dispatcher 禁用(见文件顶部),避免 undici 默认 300s 抢先掐断长阻塞请求
+      // (POST /message 45min)或空闲 SSE(/event)。
       const res = await fetch(url, {
         ...fetchOpts,
         signal: ctrl.signal,
-        headersTimeout: timeoutMs > 0 ? timeoutMs + 10_000 : 0,
-        bodyTimeout: timeoutMs > 0 ? timeoutMs + 10_000 : 0,
+        dispatcher: DISPATCHER,
       });
       if (timer) clearTimeout(timer);
       if (res.status >= 500) {

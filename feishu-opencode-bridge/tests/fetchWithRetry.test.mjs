@@ -168,6 +168,7 @@ test("fetchWithRetry: already-aborted signal aborts immediately", async () => {
 
 test("fetchWithRetry: 8s 响应在 30s 超时下不 abort(回归 This operation was aborted)", { timeout: 15000 }, async () => {
   const calls = [];
+  const originalFetch = globalThis.fetch;
   globalThis.fetch = async (url) => {
     calls.push(url);
     await new Promise((r) => setTimeout(r, 8000));
@@ -178,6 +179,39 @@ test("fetchWithRetry: 8s 响应在 30s 超时下不 abort(回归 This operation 
     assert.equal(res.status, 200);
     assert.equal(calls.length, 1, "8s 响应在 30s 超时下不应重试");
   } finally {
-    // 恢复 fetch 由其他 test 自行处理;这里只确保不 abort
+    globalThis.fetch = originalFetch; // 必须恢复,否则污染后续依赖真实 fetch 的测试
+  }
+});
+
+test("fetchWithRetry: 连接层超时禁用,由 AbortController 控制(不抛 HeadersTimeout)", { timeout: 10000 }, async () => {
+  // 服务器永不返回响应头:若 undici 默认 headersTimeout=300s 生效,300ms 的
+  // AbortController 不会先触发;修复后(Agent dispatcher headersTimeout=0)应在 ~300ms 抛 AbortError。
+  const http = await import("node:http");
+  const srv = http.createServer(() => { /* 永不响应 */ });
+  await new Promise((r) => srv.listen(0, r));
+  const port = srv.address().port;
+  try {
+    const t0 = Date.now();
+    await assert.rejects(
+      fetchWithRetry(`http://127.0.0.1:${port}/`, { timeoutMs: 300, retries: 0 }),
+      (err) => err.name === "AbortError" || /abort/i.test(err.message)
+    );
+    const elapsed = Date.now() - t0;
+    assert.ok(elapsed < 2000, `应由 AbortController(300ms)触发而非 undici 默认(300s),实际 ${elapsed}ms`);
+  } finally {
+    srv.close();
+  }
+});
+
+test("fetchWithRetry: 调用 fetch 时携带 undici dispatcher(禁用连接层超时)", async () => {
+  let seen = null;
+  const fakeFetch = async (url, opts) => { seen = opts; return new Response("ok"); };
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = fakeFetch;
+  try {
+    await fetchWithRetry("http://x", { timeoutMs: 500, retries: 0 });
+    assert.ok(seen.dispatcher, "fetch 应携带 undici dispatcher(连接层超时禁用,由 AbortController 控制业务超时)");
+  } finally {
+    globalThis.fetch = originalFetch;
   }
 });
