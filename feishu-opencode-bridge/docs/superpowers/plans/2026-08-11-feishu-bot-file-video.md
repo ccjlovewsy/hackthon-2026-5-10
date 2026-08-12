@@ -76,33 +76,58 @@
 
 ---
 
-## Task 1: Issue 1 止血 — POST 超时常量化 + 错误回复测试
+## Task 1: Issue 1 止血 — abort 定位 + 内网请求超时全面放宽 + 错误回复测试
 
 **Files:**
-- Modify: `src/feishuBotCore.mjs:300`(POST `/message` 超时常量化,当前已是 `30_000` 未抽常量)
+- Modify: `src/feishuBotCore.mjs`(POST `/message` 超时常量化 + 轮询/建会话超时放宽,见 Step 1)
 - Modify: `tests/fetchWithRetry.test.mjs`(补慢响应测试)
 - Modify: `src/feishuBot.mjs`(把 `im.message.receive_v1` handler 体抽成可导出函数,见 Step 3)
 - Modify: `tests/feishuBot.test.mjs`(补错误回复测试)
 
 **Interfaces:**
 - Consumes: `fetchWithRetry`(已有)
-- Produces: `POST_MESSAGE_TIMEOUT_MS` 模块常量(便于以后调)
+- Produces: `POST_MESSAGE_TIMEOUT_MS`/`POLL_TIMEOUT_MS`/`POLL_RETRIES`/`CREATE_SESSION_TIMEOUT_MS` 模块常量(便于以后调)
 
-**目标:** 把工作树已改的 `5_000 → 30_000` 抽成常量并补测试,确保慢响应不 abort。
+**目标:** 让 abort 消失——先定位 abort 实际发生在哪个请求,再全面放宽内网请求超时(不只 POST),补测试 + 重启生效。
 
-- [ ] **Step 1: 抽常量**
+> ⚠️ **实测反馈(2026-08-12)**:用户发消息仍收到 `❌ 处理失败：This operation was aborted`。
+> 这条错误回复能出现,说明**工作树的 30s 新代码已在跑**(旧代码 catch 只记日志不回复)——所以 abort 不是 5s 旧值导致,必须按 Step 0 定位,不能假设"只调 POST 超时"就完事。
+
+- [ ] **Step 0: 定位 abort 实际发生在哪个请求**
+
+1. `tail -f data/feishu-bot.log` 复现一次,看 abort 前最后一条日志:
+   - 停在 `执行 (session xxx): ...` → 在 `sendMessage` 内(POST 指令 或 轮询 GET)
+   - 停在 `新会话: ...` → `createSession` 超时
+2. 用 curl 计时 POST 是否**同步阻塞**(调试记录 P2 遗留项,plan 之前没纳入):
+   ```bash
+   time curl -X POST http://127.0.0.1:41234/session/<sid>/message \
+     -H "content-type: application/json" \
+     -d '{"parts":[{"type":"text","text":"hi"}]}'
+   ```
+   - `real` > 30s → POST 同步阻塞(serve 等到指令执行完才返回),30s 也不够,Step 1 的 `POST_MESSAGE_TIMEOUT_MS` 提到 60_000
+   - `real` 秒级返回 → abort 来自轮询 GET / `createSession`,放宽对应常量即可
+3. 临时打点(可选):`sendMessage` 的 POST/轮询 fetch 前后各加一行 `log()`,打印 URL 与方法,复现一次即可定位。
+
+- [ ] **Step 1: 抽常量 + 全面放宽内网请求超时(不只 POST)**
 
 `src/feishuBotCore.mjs` 顶部(import 之后,纯函数之前)加:
 
 ```js
-// opencode serve POST /message 的超时:opencode 处理指令通常 10-60s,
-// 5s 太短会触发 AbortController → "This operation was aborted"。
-// 30s 是 POST 接口本身响应(不是指令执行完成)的合理上限;指令实际执行
-// 走轮询,默认 45min deadline。
-const POST_MESSAGE_TIMEOUT_MS = 30_000;
+// opencode serve 内网请求超时:opencode 处理指令通常 10-60s,超时太短会触发
+// AbortController → "This operation was aborted"。POST /message 若同步阻塞
+// (serve 等到指令执行完才返回),30s 也不保险——用 Step 0 的 curl 计时确认后调整。
+const POST_MESSAGE_TIMEOUT_MS = 30_000;   // POST 指令(Step 0 确认同步阻塞则提到 60_000)
+const POLL_TIMEOUT_MS = 15_000;           // 轮询 GET /message(原 5000 太脆)
+const POLL_RETRIES = 3;                   // 轮询重试(原 retries: 1)
+const CREATE_SESSION_TIMEOUT_MS = 15_000; // createSession(原 5000)
 ```
 
-把 line 300 `timeoutMs: 30_000` 改回 `timeoutMs: POST_MESSAGE_TIMEOUT_MS`。
+替换 `createOpenCodeServer` 内的三处硬编码:
+- POST 指令(`sendMessage` 内,现 `timeoutMs: 30_000`):`timeoutMs: POST_MESSAGE_TIMEOUT_MS`
+- 轮询 GET(`sendMessage` 内,现 `timeoutMs: 5000, retries: 1`):`timeoutMs: POLL_TIMEOUT_MS, retries: POLL_RETRIES`
+- `createSession` POST(现 `timeoutMs: 5000, retries: 1`):`timeoutMs: CREATE_SESSION_TIMEOUT_MS`
+
+(定位结论若指向某处,以该处为准;其余保留放宽值,内网请求超时放宽无害。)
 
 - [ ] **Step 2: 补 fetchWithRetry 慢响应测试**
 
@@ -539,9 +564,10 @@ git commit -m "feat(feishu-bot): /file <path> 命令 + opencode 输出文件自�
 - Test: `tests/feishuBot.test.mjs`
 
 **Interfaces:**
-- `core` 新增 `opts.downloadFile: (messageId, fileName) => Promise<absPath>`(可选,不传则 file 消息回退提示"未配置入站下载能力")
+- `core` 新增 `opts.downloadFile: (messageId, fileKey, fileName) => Promise<absPath>`(可选,不传则 file 消息回退提示"未配置入站下载能力")
+- ⚠️ **下载必须传 `file_key`**:飞书下载资源接口是 `GET /im/v1/messages/{message_id}/resources/{file_key}`,**path 同时需要 `message_id` 和 `file_key` 两个参数**——`file_key` 从消息 content 的 `fileInfo.file_key` 解析。只传 `message_id` 会报 SDK 校验错误 `request miss file_key path argument`(实测已复现)。
 - ⚠️ **飞书 file 消息的 `message.content` 通常只有 `{ "file_key": "..." }`,不一定含 `file_name`**——实现必须处理文件名缺失(fallback 命名 + 仅对"有扩展名"的文件做白名单校验,见 Step 3)
-- 下载用 `client.im.messageResource.get({ path: { message_id }, params: { type: "file" } })` 返回 stream → 落盘 `tmp/feishu-inbox/<messageId>-<fileName>`
+- 下载响应 stream → 落盘 `tmp/feishu-inbox/<messageId>-<fileName>`
 
 **目标:** 用户在飞书拖一个 HTML 文件到会话 → 桥下载到 `tmp/feishu-inbox/` → 把"处理这个文件: tmp/feishu-inbox/xxx.html"作为指令发给 opencode。
 
@@ -550,7 +576,7 @@ git commit -m "feat(feishu-bot): /file <path> 命令 + opencode 输出文件自�
 `tests/feishuBot.test.mjs` 加 3 个 case:
 
 ```js
-// case A:file 消息 → downloadFile 被调一次,sendMessage 指令含 absPath
+// case A:file 消息 → downloadFile 被调一次(收到 fileKey + fileName),sendMessage 指令含 absPath
 const sent = [], replies = [], downloads = [];
 const fakeServer = {
   onPermissionAsked: null,
@@ -564,8 +590,8 @@ const core = createFeishuBotCore({
   sessionFile: "/tmp/test-inbox.json",
   reply: (chatId, text) => replies.push(text),
   sendPermissionAsk: () => {},
-  downloadFile: async (messageId, fileName) => {
-    downloads.push({ messageId, fileName });
+  downloadFile: async (messageId, fileKey, fileName) => {
+    downloads.push({ messageId, fileKey, fileName });
     return `/tmp/feishu-inbox/${messageId}-${fileName}`;
   },
   rootDir: "/tmp",
@@ -578,6 +604,8 @@ await core.handleMessage({
   sender: { sender_id: { open_id: "ou_me" } },
 });
 assert.equal(downloads.length, 1);
+assert.equal(downloads[0].fileKey, "fk_x", "必须把 content 里的 file_key 传给 downloadFile(否则 SDK 报 request miss file_key)");
+assert.equal(downloads[0].fileName, "a.html");
 assert.match(sent[0], /处理这个文件:/);
 assert.match(sent[0], /a\.html/);
 ```
@@ -599,12 +627,15 @@ import { pipeline } from "node:stream/promises";
 
 const INBOX_DIR = process.env.FEISHU_INBOX_DIR || new URL("../tmp/feishu-inbox/", import.meta.url).pathname;
 
-async function downloadInboxFile(messageId, fileName) {
+async function downloadInboxFile(messageId, fileKey, fileName) {
   await mkdir(INBOX_DIR, { recursive: true }); // 幂等,避免顶层 await 位置争议
   const safeName = basename(fileName || "file") || "file"; // 防越权:剥掉任何目录成分
   const absPath = join(INBOX_DIR, `${messageId}-${safeName}`);
+  // ⚠️ 下载资源接口 path 必须同时有 message_id 和 file_key:
+  // GET /im/v1/messages/{message_id}/resources/{file_key}?type=file
+  // 只传 message_id → SDK 校验报 "request miss file_key path argument"(实测复现)
   const resp = await client.im.messageResource.get({
-    path: { message_id: messageId },
+    path: { message_id: messageId, file_key: fileKey },
     params: { type: "file" },
   });
   // TODO(实现时查证):若 SDK 响应能拿到真实文件名(如 content-disposition 或 data 的
@@ -616,7 +647,7 @@ async function downloadInboxFile(messageId, fileName) {
 }
 ```
 
-注意:飞书文件消息下载**必须用 `message_id`**(`file_key` 是上传时拿到的,下载入站文件要用 `im.messageResource.get` + `message_id` + `type:"file"`)。`createFeishuBotCore` 调用处加 `downloadFile: downloadInboxFile`。
+注意:`file_key` 来自消息 content 的 `fileInfo.file_key`(见 Step 3,core 解析后作为第二个参数传入)。`createFeishuBotCore` 调用处加 `downloadFile: downloadInboxFile`。
 
 - [ ] **Step 3: 在 `feishuBotCore.mjs` 接入**
 
@@ -663,10 +694,17 @@ if (message.message_type === "file") {
     await reply?.(chatId, errText);
     return errText;
   }
+  // file_key 必须传给 downloadFile(下载资源接口 path 需要 message_id + file_key 两个参数)
+  const fileKey = fileInfo.file_key;
+  if (!fileKey) {
+    const errText = "❌ 文件消息缺少 file_key,无法下载";
+    await reply?.(chatId, errText);
+    return errText;
+  }
   await reply?.(chatId, `📥 已收到文件:${fileName},下载中…`);
   let absPath;
   try {
-    absPath = await downloadFile(message.message_id, fileName);
+    absPath = await downloadFile(message.message_id, fileKey, fileName);
   } catch (err) {
     const errText = `❌ 下载文件失败:${err?.message ?? err}`;
     await reply?.(chatId, errText);
@@ -691,6 +729,8 @@ Expected: 新增 case PASS,无回归。
 飞书拖一个 `.md` 文件到会话,桥应回复 `📥 已收到文件:x.md,下载中…` → opencode 处理 → 给出回复。
 
 > 手测时留意回复里的文件名:若飞书 file 消息 content 确实无 `file_name`,会显示 `file-xxxxxxxx` 派生名——属预期;若实现时查证 `messageResource.get` 能返回真实文件名,优先用之(见 Step 2 TODO)。
+>
+> ⚠️ **回归重点**:此前的 `❌ 下载文件失败:request miss file_key path argument` 就是缺 `file_key` 导致——手测确认不再出现该错误,且 `tmp/feishu-inbox/` 出现下载文件。
 
 - [ ] **Step 6: Commit**
 
@@ -700,6 +740,7 @@ git commit -m "feat(feishu-bot): 入站文件消息 - 下载到 tmp/feishu-inbox
 
 - downloadFile 回调注入(im.messageResource.get stream → pipeline 落盘)
 - 路由 -1:file 类型消息 → 下载 → 包装成 '处理这个文件: <absPath>' 指令
+- 下载接口 path 必须带 message_id + file_key(修复 request miss file_key path argument)
 - 分支插在 extractMessageText 之前(file 消息无 text 字段)+ 自带授权校验
 - 文件名 basename 防越权;有扩展名才做白名单校验(content 可能无 file_name)"
 ```
@@ -838,19 +879,19 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, writeFileSync, readdirSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { summarizeVideo, chunkTranscript } from "../src/videoSummary.mjs";
+import { EventEmitter } from "node:events";
+import { summarizeVideo, chunkTranscript, __setSpawn } from "../src/videoSummary.mjs";
 
 test("summarizeVideo: 字幕直取成功(策略 subtitle)", async () => {
   const tmpRoot = mkdtempSync(join(tmpdir(), "vs-"));
   try {
-    // mock globalThis.fetch 不需要(走子进程);mock spawn 在 videoSummary 内部
-    // 简化:monkey-patch child_process.spawn 让 yt-dlp 生成一个 .txt 字幕文件
-    const origSpawn = (await import("node:child_process")).spawn;
-    (await import("node:child_process")).spawn = function (cmd, args, opts) {
+    // ⚠️ 不能 monkey-patch import("node:child_process").spawn——ESM 命名空间只读,
+    // 赋值会抛 "Cannot assign to read only property 'spawn'"。videoSummary 提供
+    // __setSpawn 注入点(内部 _spawn 变量),测试结束后 __setSpawn() 恢复默认。
+    __setSpawn(function (cmd, args) {
       if (cmd === "yt-dlp" && args.includes("--skip-download")) {
         const subPath = join(tmpRoot, "abc.txt");
         writeFileSync(subPath, "这是字幕内容,长度足够通过最小阈值检查。");
-        const { EventEmitter } = require("node:events");
         const fake = new EventEmitter();
         fake.stdout = new EventEmitter();
         fake.stderr = new EventEmitter();
@@ -860,13 +901,13 @@ test("summarizeVideo: 字幕直取成功(策略 subtitle)", async () => {
         }, 10);
         return fake;
       }
-      return origSpawn(cmd, args, opts);
-    };
+      throw new Error(`unexpected spawn: ${cmd} ${args?.join(" ")}`);
+    });
     const r = await summarizeVideo("https://youtu.be/abc", { downloadDir: tmpRoot });
     assert.equal(r.strategy, "subtitle");
     assert.ok(r.transcript.length > 0);
-    (await import("node:child_process")).spawn = origSpawn;
   } finally {
+    __setSpawn(); // 恢复默认 spawn(必须,否则影响其他测试)
     rmSync(tmpRoot, { recursive: true, force: true });
   }
 });
@@ -878,7 +919,7 @@ test("chunkTranscript: 按句号切块", () => {
 });
 ```
 
-(case B/C/D 同理,见实现)
+(case B/C/D 同理:case B 需 `__setSpawn` 处理 `-f bestaudio` 分支并 mock `globalThis.fetch`(Whisper API);case C 需临时设 `WHISPER_CMD`;case D 让 fake spawn 抛错。注意:case B/C 里 `WHISPER_CMD`/`OPENAI_API_KEY` 是模块加载时读取的环境变量,测试需在 import 前设 `process.env` 或给 `summarizeVideo` 传 `opts.llm`——见 Step 2 实现建议优先用 `opts.llm` 传参,避免环境变量时序问题)
 
 - [ ] **Step 2: 实现 `src/videoSummary.mjs`**
 
@@ -886,6 +927,13 @@ test("chunkTranscript: 按句号切块", () => {
 import { spawn } from "node:child_process";
 import { mkdirSync, existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join, basename } from "node:path";
+
+// 测试注入点:ESM 命名空间只读,不能 monkey-patch import("node:child_process").spawn,
+// 因此 runCmd 通过内部变量 _spawn 调用;测试用 __setSpawn(fn) 替换,__setSpawn() 恢复默认。
+let _spawn = spawn;
+export function __setSpawn(fn) {
+  _spawn = fn ?? spawn;
+}
 
 const DEFAULT_DOWNLOAD_DIR = "tmp/videos/";
 const YT_DLP_BIN = process.env.YT_DLP_BIN || "yt-dlp";
@@ -998,7 +1046,7 @@ async function transcribeWithLocalWhisper(audioPath, whisperCmd) {
 
 function runCmd(cmd, args) {
   return new Promise((resolve) => {
-    const child = spawn(cmd, args, { stdio: ["ignore", "pipe", "pipe"] });
+    const child = _spawn(cmd, args, { stdio: ["ignore", "pipe", "pipe"] });
     let stdout = "";
     let stderr = "";
     child.stdout.on("data", (d) => (stdout += d));
@@ -1069,12 +1117,12 @@ whisper.cpp(C++ 单二进制)、faster-whisper(Python 加速 4x)。
 
 - [ ] **Step 1: 测试先行**
 
-case A:URL 是 youtu.be/xxx → `summarizeVideo` mock 返回 `{transcript: "字幕内容", strategy: "subtitle"}` → 断言 `server.sendMessage` 收到含"请总结以下视频字幕"的指令。
-case B:URL 是 bilibili.com/video/xxx → 同 A。
-case C:`summarizeVideo` 抛错 → `reply` 收到 `❌ 视频总结失败:...`。
+case A:URL 是 `https://youtu.be/xxx` → `summarizeVideo` mock 返回 `{transcript: "字幕内容", strategy: "subtitle"}` → 断言 `server.sendMessage` 收到含"请总结以下视频字幕"的指令,且传给 `summarizeVideo` 的是**提取出的 URL**(不是整段文本)。
+case B:文本是分享口令形态 `【五分钟带你看懂黑客松冠军的 Claude Code 配置-哔哩哔哩】 https://b23.tv/w7n1hl5`(标题在前 + bilibili 短链)→ 仍识别为视频,`summarizeVideo` 收到 `https://b23.tv/w7n1hl5`。
+case C:`summarizeVideo` 抛错 → `reply` 收到 `❌ 视频总结失败:...`;抛 `ENOENT`(yt-dlp 未装)→ 收到"请先安装 yt-dlp"提示。
 case D:URL 是普通网页(非视频站点) → 不走 videoSummary,落入路由 2 当普通指令处理。
 
-URL 识别正则:`/^https?:\/\/(?:youtu\.be\/|youtube\.com\/watch|bilibili\.com\/video|v\.youku\.com|tv\.sohu\.com\/v)/i`。
+> ⚠️ **实测反馈(2026-08-12)**:`【五分钟带你看懂黑客松冠军的 Claude Code 配置-哔哩哔哩】 https://b23.tv/w7n1hl5` 未被识别——原始正则 `^` 锚定开头,且白名单没有 `b23.tv`。识别逻辑必须改为:从文本**任意位置**提取首个 URL,再做域名白名单匹配(含 `b23.tv` 短链;短链直接交 yt-dlp,其内置跟随重定向)。
 
 - [ ] **Step 2: 在 `feishuBot.mjs` 注入 videoSummary**
 
@@ -1099,8 +1147,12 @@ const core = createFeishuBotCore({
 opts 解构加 `summarizeVideo?`。`handleMessage` 路由 0.6(`/file`)之后,路由 1(审批)之前,加路由 0.7:
 
 ```js
-const videoMatch = text.match(/^https?:\/\/(?:youtu\.be\/|youtube\.com\/watch\?v=|bilibili\.com\/video\/|v\.youku\.com\/|tv\.sohu\.com\/v\/|www\.bilibili\.com\/video\/)/i);
-if (videoMatch && summarizeVideo) {
+// 从文本任意位置提取首个 URL(用户发分享口令,如"【标题】 https://b23.tv/xxx",URL 不在开头)
+const urlMatch = text.match(/https?:\/\/[^\s]+/i);
+const url = urlMatch ? urlMatch[0] : null;
+// 视频域名白名单(含 bilibili 短链 b23.tv;短链直接交 yt-dlp,其内置跟随重定向)
+const VIDEO_URL_RE = /^(?:https?:\/\/)?(?:youtu\.be\/|youtube\.com\/watch\?v=|youtube\.com\/shorts\/|bilibili\.com\/video\/|www\.bilibili\.com\/video\/|b23\.tv\/|v\.youku\.com\/|tv\.sohu\.com\/v\/)/i;
+if (url && VIDEO_URL_RE.test(url) && summarizeVideo) {
   return queued(chatId, async () => {
     const onProgress = (stage, info) => {
       const stageText = {
@@ -1110,19 +1162,25 @@ if (videoMatch && summarizeVideo) {
         "done": "✅ 完成",
         "error": "❌ 失败",
       }[stage] || stage;
-      reply?.(chatId, `${stageText}${info?.strategy ? ` (${info.strategy})` : ""}`).catch(() => {});
+      // 注意:reply 可能未注入,`reply?.().catch` 会因 undefined.catch 抛错,必须分步
+      const send = reply?.(chatId, `${stageText}${info?.strategy ? ` (${info.strategy})` : ""}`);
+      send?.catch?.(() => {});
     };
     try {
-      const { transcript, strategy } = await summarizeVideo(text, { onProgress });
+      const { transcript, strategy } = await summarizeVideo(url, { onProgress });
       const instruction = `请总结以下视频字幕,提炼核心要点(分点列出,每点 1-2 句),并标注关键内容出现的大致时间戳。如果字幕不是中文,请翻译为中文后再总结。\n\n---\n${transcript}\n---\n`;
       return await runInstruction(chatId, instruction, {
-        sessionLabel: `VIDEO: ${text} (${strategy})`,
+        sessionLabel: `VIDEO: ${url} (${strategy})`,
       });
     } catch (err) {
-      const errText = `❌ 视频总结失败:${err?.message ?? err}`;
+      // Risk 表承诺:yt-dlp 缺失时给针对性提示,而不是笼统的失败文案
+      const errText = /ENOENT|spawn .*yt-dlp/i.test(err?.message ?? "")
+        ? `❌ 视频总结失败:未找到 yt-dlp,请先安装(brew install yt-dlp 或 pip install yt-dlp)`
+        : `❌ 视频总结失败:${err?.message ?? err}`;
       sessionLog?.append(chatId, `ERROR: ${formatErr(err)}`);
       metrics.messagesFailed++;
-      await reply?.(chatId, errText).catch(() => {});
+      const send = reply?.(chatId, errText);
+      send?.catch?.(() => {});
       return errText;
     }
   });
@@ -1137,6 +1195,8 @@ Expected: 新增 4 个 case PASS。
 - [ ] **Step 5: 手测**
 
 飞书发 `https://youtu.be/dQw4w9WgXcQ` → 应收到 `📥 取字幕中…` → `✅ 完成 (subtitle)` → opencode 总结要点回复。
+
+再发分享口令形态(实测复现的形态):`【五分钟带你看懂黑客松冠军的 Claude Code 配置-哔哩哔哩】 https://b23.tv/w7n1hl5` → 应同样触发视频总结(识别 + 短链跟随),不再落入普通指令。
 
 - [ ] **Step 6: 更新 `.env.example`**
 
@@ -1163,6 +1223,7 @@ Expected: 新增 4 个 case PASS。
 
 ```markdown
 | `https://youtu.be/xxx` | 视频自动总结(字幕直取 → Whisper fallback) |
+| bilibili 链接(含 `b23.tv` 短链、带标题分享口令) | 同上,自动识别文本内 URL |
 | `/file <path>` | 发送本地文件到飞书(限工作目录子树) |
 ```
 
@@ -1191,7 +1252,7 @@ git commit -m "feat(feishu-bot): 视频URL自动总结 - 字幕优先 + Whisper 
 - [ ] **Step 1: 跑全测**
 
 Run: `cd feishu-opencode-bridge && npm test`
-Expected: 全 PASS(原 46 + 新增 ~10 = 56+ tests)
+Expected: 全 PASS(基线 54 + 本 plan 新增 ≈ 66+ tests)
 
 - [ ] **Step 2: 重启桥进程**
 
@@ -1205,13 +1266,14 @@ tail -f data/feishu-bot.log
 
 | # | 测试 | 期望 |
 |---|---|---|
-| 1 | 发 "你好" | 30s 内有回复,无 `This operation was aborted` |
+| 1 | 发 "你好" | 30s 内有回复,无 `This operation was aborted`(若仍 abort:按 Task 1 Step 0 定位 POST 阻塞 vs 轮询超时) |
 | 2 | 发 `/file /Users/issuser/code/hackthon-2026-5-10/README.md` | 飞书收到 README.md 文件 |
 | 3 | 发 `/file /etc/passwd` | 收到 `❌ 越权:路径不在工作目录内` |
 | 4 | 指令 "在 /Users/issuser/code/hackthon-2026-5-10/tmp 下生成 hello.html" | opencode 回复 + 桥自动发 hello.html |
-| 5 | 拖一个 .md 文件到会话 | 收到 `📥 已收到文件:xxx.md,下载中…` → opencode 处理回复 |
+| 5 | 拖一个 .md 文件到会话 | 收到 `📥 已收到文件:xxx.md,下载中…` → opencode 处理回复;**不再出现 `request miss file_key path argument`** |
 | 6 | 发 `https://youtu.be/dQw4w9WgXcQ` | 收到进度消息 + 视频要点总结 |
-| 7 | 发 `/kill` 后再发消息 | 会话重置,新消息正常回复 |
+| 7 | 发 `【五分钟带你看懂黑客松冠军的 Claude Code 配置-哔哩哔哩】 https://b23.tv/w7n1hl5` | 触发视频总结(识别文本内 URL + b23.tv 短链),不再落入普通指令 |
+| 8 | 发 `/kill` 后再发消息 | 会话重置,新消息正常回复 |
 
 - [ ] **Step 4: README 整体校对**
 
@@ -1226,21 +1288,125 @@ git commit -m "docs(feishu-bot): 文件收发 + 视频总结 + abort 修复 READ
 
 ---
 
+## Task 9: 功能验收 node test 规划(plan 完成后按功能逐个执行)
+
+**目标:** 8 个 Task 全部完成后,按功能逐个跑 node test 验收——每个功能对应独立测试文件/测试组,明确 case 清单、关键断言与预期通过数。全部绿了才进 Task 8 的手测清单。
+
+> **运行约定:** 全部在 `feishu-opencode-bridge/` 目录下执行。单文件:`node --test tests/<file>.test.mjs`;全量:`npm test`(等价 `node --test tests/*.test.mjs`)。
+> **基线:** 当前 54 个测试全 PASS。本 plan 新增 ~21 个(2+4+3+3+5+4),完成后全量 ≈ 75 个。
+> **执行顺序:** 功能 2 → 1 → 3 → 4 → 5 → 6 → 7;每过一档再进下一档,任何 FAIL 先修再继续。
+
+- [ ] **功能 1:Issue 1 — abort 修复(超时常量 + 全面放宽 + 错误回复)**
+
+文件:`tests/fetchWithRetry.test.mjs`(新增 1)、`tests/feishuBot.test.mjs`(新增 1)
+运行:`node --test tests/fetchWithRetry.test.mjs tests/feishuBot.test.mjs`
+
+| case | 断言 |
+|---|---|
+| `fetchWithRetry: 8s 响应在 30s 超时下不 abort(回归 This operation was aborted)` | status 200;`calls.length === 1`(不重试) |
+| `createMessageHandler: core 抛错时 reply 收到 ❌ 处理失败` | `replies.length === 1`;含 `❌ 处理失败`;含错误 message(`boom`) |
+
+预期:2 个新 case + 各文件原有 case 全 PASS。
+
+- [ ] **功能 2:fileTransfer 纯函数(路径安全 / 出站检测 / /file 解析)**
+
+文件:`tests/fileTransfer.test.mjs`(新建,4 个)
+运行:`node --test tests/fileTransfer.test.mjs`
+
+| case | 断言要点 |
+|---|---|
+| `isPathSafe: 子树内 true,越界 false` | 子树内(含嵌套)`true`;`../` 越界、`/etc/passwd`、兄弟目录 `false` |
+| `validateExtension: 白名单 + 大小写不敏感` | `a.html`/`a.HTML` `true`;`a.exe`/`a.html.exe` `false` |
+| `extractFileReferences: 从文本提取存在的文件路径,只在 root 子树内` | 能提到 `a.html`/`b.md`;`/etc/passwd` 不被提 |
+| `parseFilePathCommand: /file <path> 解析 + 越权拦截` | 合法路径 `ok:true`;`/etc/passwd` 拒绝且 reason 含"越权";裸 `/file` 拒绝含"用法" |
+
+预期:4 PASS。**最先验收**——功能 3/4 都依赖它。
+
+- [ ] **功能 3:出站文件(`/file` 命令 + opencode 输出自动发)**
+
+文件:`tests/feishuBot.test.mjs`(新增 3)
+运行:`node --test tests/feishuBot.test.mjs`
+
+| case | 断言要点 |
+|---|---|
+| A:`/file <path>` 命中 | `reply` 不被调;`sendFile` 被调一次且参数含正确 `absPath` |
+| B:`/file /etc/passwd` 越权 | `sendFile` 不被调;`reply` 文本含"越权" |
+| C:opencode 输出文本含 `tmp/x.html` 且文件真实存在 | `reply` 收到原文本回复;`sendFile` 也被调一次 |
+
+预期:3 PASS + 该文件原有 case 不回归。case C 需在临时目录写真实文件(参考 `tests/feishuBot.test.mjs` 现有 mock server + mock reply 风格)。
+
+- [ ] **功能 4:入站文件(下载 + 转交 opencode,含 file_key)**
+
+文件:`tests/feishuBot.test.mjs`(新增 3)
+运行:`node --test tests/feishuBot.test.mjs`
+
+| case | 断言要点 |
+|---|---|
+| A:file 消息 → `downloadFile` 被调 | **必须断言 `downloadFile` 收到 `fileKey === "fk_x"`**(实测 `request miss file_key path argument` 回归);指令含 `处理这个文件:` 与 `a.html` |
+| B:content 无 `file_name` | 不拒绝;fallback 命名;`downloadFile` 仍被调一次 |
+| C:未授权用户发 file 消息 | 被拒(`🚫 未授权`);`downloadFile` 不被调(分支自带授权校验的安全回归) |
+
+预期:3 PASS。case A 的 fileKey 断言是本次修复的防回归核心。
+
+- [ ] **功能 5:videoSummary 策略链(字幕 / Whisper API / 本地 whisper / 全失败)**
+
+文件:`tests/videoSummary.test.mjs`(新建,5 个)
+运行:`node --test tests/videoSummary.test.mjs`
+
+| case | 断言要点 |
+|---|---|
+| A:yt-dlp 字幕直取成功 | `strategy === "subtitle"`;`transcript` 非空 |
+| B:无字幕 → Whisper API | `strategy === "whisper-api"`(mock `globalThis.fetch` 返回转写文本) |
+| C:无字幕 + `WHISPER_CMD` → 本地 whisper | `strategy === "whisper-local"` |
+| D:全部失败 | `summarizeVideo` 抛错;`onProgress("error", err)` 被调 |
+| `chunkTranscript: 按句号切块` | 长文本切成 ≥2 块 |
+
+预期:5 PASS。注意:spawn 一律经 `__setSpawn` 注入(ESM 命名空间只读,禁止 `import("node:child_process").spawn = ...`);case B/C 用 `opts.llm` 传参而非改 `process.env`(避免模块加载时读环境变量的时序问题)。
+
+- [ ] **功能 6:视频 URL 识别 + 总结路由(含 b23.tv / 标题前缀)**
+
+文件:`tests/feishuBot.test.mjs`(新增 4)
+运行:`node --test tests/feishuBot.test.mjs`
+
+| case | 断言要点 |
+|---|---|
+| A:`https://youtu.be/xxx` | `summarizeVideo` 收到的是**提取出的 URL**(非整段文本);`sendMessage` 指令含"请总结以下视频字幕" |
+| B:分享口令 `【标题】 https://b23.tv/w7n1hl5` | 仍识别为视频;`summarizeVideo` 收到 `https://b23.tv/w7n1hl5`(实测回归) |
+| C:`summarizeVideo` 抛错 | `reply` 含 `❌ 视频总结失败`;抛 `ENOENT` 时含"请先安装 yt-dlp" |
+| D:普通网页 URL | 不走 videoSummary;落路由 2 当普通指令 |
+
+预期:4 PASS。case B 是本次 b23.tv 修复的防回归核心。
+
+- [ ] **功能 7:重构不回归(runInstruction 抽取)**
+
+无新测试。功能 3/4/6 的 case 全 PASS 即证明重构无回归(路由 2 与入站文件共用同一执行流)。
+运行:`npm test`
+
+- [ ] **全量验收**
+
+运行:`npm test`
+预期:全 PASS,总数 ≈ 75(54 基线 + 21 新增)。
+
+---
+
 ## Verification Matrix
 
 | 验收项 | Task | 测试 | 手测 |
 |---|---|---|---|
-| `This operation was aborted` 不再发生 | 1 | fetchWithRetry 慢响应回归 | 飞书发消息 30s 内回复 |
-| 错误时用户收到 `❌ 处理失败` | 1 | feishuBot 错误回复测试 | 故意 kill opencode serve 触发 |
+| `This operation was aborted` 不再发生 | 1 | fetchWithRetry 慢响应回归 + 内网超时放宽 | 飞书发消息 30s 内回复;仍 abort 则按 Step 0 定位 |
+| 错误时用户收到 `❌ 处理失败` | 1 | feishuBot 错误回复测试(createMessageHandler) | 故意 kill opencode serve 触发 |
 | `/file <path>` 命令 | 3 | feishuBot `/file` 测试 | README.md 发送成功 |
 | 路径越权拦截 | 3 | fileTransfer `isPathSafe` + `parseFilePathCommand` | `/file /etc/passwd` 被拒 |
 | opencode 输出文件自动发 | 3 | feishuBot 出站检测测试 | 生成 hello.html 自动发 |
-| 入站文件消息下载 + 转交 | 4 | feishuBot 文件消息测试 | 拖 .md 文件到会话 |
+| 入站文件下载(传 file_key)+ 转交 | 4 | feishuBot 文件消息测试(case A 断言 fileKey) | 拖 .md 文件,无 `request miss file_key` |
+| 入站文件未授权拦截 | 4 | feishuBot case C(安全回归) | 非授权账号拖文件被拒 |
 | videoSummary 字幕直取 | 6 | videoSummary case A | youtu.be URL 总结 |
 | videoSummary Whisper fallback | 6 | videoSummary case B/C | 无字幕视频 |
 | videoSummary 全失败错误处理 | 6 | videoSummary case D | 故意 yt-dlp 失败 |
+| 视频 URL 识别(含 b23.tv 短链/标题前缀) | 7 | feishuBot URL 路由测试 case B | 发 b23.tv 分享口令触发总结 |
 | 视频总结进度推送 | 7 | feishuBot URL 路由测试 | 飞书看到 `📥 取字幕中…` 等 |
 | 重构不回归 | 5 | 全测 PASS | / |
+| 功能验收 node test(按功能逐个跑) | 9 | 各功能测试文件(见 Task 9 case 清单) | `npm test` 全绿,总数 ≈ 75 |
 
 ---
 
@@ -1248,11 +1414,11 @@ git commit -m "docs(feishu-bot): 文件收发 + 视频总结 + abort 修复 READ
 
 | 风险 | 缓解 |
 |---|---|
-| `yt-dlp` 命令未安装 | 启动时检测 `yt-dlp --version`,缺失则 `summarizeVideo` 路由跳过(URL 当普通指令),reply 提示用户安装 |
+| `yt-dlp` 命令未安装 | URL 路由 catch 检测 `ENOENT`/`spawn yt-dlp` → 回复"请先安装 yt-dlp(brew install / pip install)",不重试(Task 7 Step 3 已实现;不做启动时检测,避免额外进程开销) |
 | `whisper.cpp` 路径配错 | 调用时若 `code !== 0`,错误回复用户,不重试 |
-| 飞书文件 25MB 上限 | `sendFile` 前 `statSync` 检查大小,超限拒绝并提示 |
+| 飞书文件 25MB 上限 | `sendFile` 前 `statSync` 检查大小,超限拒绝并提示(Task 3 已实现) |
 | 出站路径检测误报 | 严格扩展名白名单 + 必须真实存在 + `OPENCODE_DIR` 子树,三重过滤 |
-| 大视频下载耗时 | `--max-filesize 100M` 限制 + `VIDEO_MAX_DURATION_SEC` 时长上限 + 进度消息 |
+| 大视频下载耗时 | `--max-filesize 100M` 限制 + 进度消息;`VIDEO_MAX_DURATION_SEC` 时长上限**需在 Task 6 实现时加入**(`.env.example` 已声明,现实现未含——如不做,从 `.env.example` 删除) |
 | 重启桥丢失正在处理的指令 | launchd 重启后 sessionMap 从 `data/feishu-sessions.json` 恢复,旧 sessionID 若仍有效则复用 |
 | `summarizeVideo` 子进程僵尸 | `runCmd` 用 `child.on("close")` 保证 resolve,不挂死 |
 | 字幕是 `[Music]` 这种 | `transcript.length < 50` 判失败,走 audio fallback |
@@ -1276,7 +1442,7 @@ git commit -m "docs(feishu-bot): 文件收发 + 视频总结 + abort 修复 READ
 
 ```
 Task 1 (Issue 1 止血) ──┐
-                        ├──► Task 8 (回归)
+                        ├──► Task 8 (回归) ──► Task 9 (功能验收 node test)
 Task 2 (fileTransfer) ──┬──► Task 3 (/file + 出站检测)
                         └──► Task 4 (入站文件) ──► Task 5 (重构 runInstruction) ──┐
                                                                                   │
@@ -1288,6 +1454,7 @@ Task 2 是 Task 3/4 的依赖。
 Task 3 和 Task 4 共用 `sendFile`/`extractFileReferences`,Task 4 完成后 Task 5 重构去重。
 Task 6 独立于 Task 2-5,可并行。
 Task 7 依赖 Task 5(复用 `runInstruction`)和 Task 6(调 `summarizeVideo`)。
-Task 8 收尾。
+Task 8 收尾(全测 + 手测清单)。
+Task 9 依赖全部 Task——按功能逐个跑 node test 做最终验收,全绿才算完成。
 
-**推荐执行顺序:** 1 → 2 → 6(并行)→ 3 → 4 → 5 → 7 → 8。
+**推荐执行顺序:** 1 → 2 → 6(并行)→ 3 → 4 → 5 → 7 → 8 → 9。
