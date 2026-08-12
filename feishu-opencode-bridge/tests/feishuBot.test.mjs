@@ -11,6 +11,7 @@ import {
   createFeishuBotCore,
   createOpenCodeServer,
 } from "../src/feishuBotCore.mjs";
+import { createMessageHandler } from "../src/feishuBot.mjs";
 
 test("extractMessageText: 单聊文本", () => {
   const msg = { content: JSON.stringify({ text: "你好" }), chat_type: "p2p" };
@@ -588,9 +589,9 @@ test("handleMessage: 入站 file 消息 → downloadFile + 包装指令发 openc
       sessionFile,
       reply: (chatId, text) => replies.push(text),
       sendPermissionAsk: () => {},
-      downloadFile: async (messageId, fileName) => {
+      downloadFile: async (messageId, fileKey, fileName) => {
         const p = path.join(inboxRoot, `${messageId}-${fileName}`);
-        downloadedFiles.push({ messageId, fileName, p });
+        downloadedFiles.push({ messageId, fileKey, fileName, p });
         return p;
       },
       log: () => {},
@@ -607,6 +608,7 @@ test("handleMessage: 入站 file 消息 → downloadFile + 包装指令发 openc
       sender: { sender_id: { open_id: "ou_me" } },
     });
     assert.equal(downloadedFiles.length, 1);
+    assert.equal(downloadedFiles[0].fileKey, "fk_x", "必须把 content 里的 file_key 传给 downloadFile(否则 SDK 报 request miss file_key path argument)");
     assert.equal(downloadedFiles[0].fileName, "test.html");
     assert.equal(sentInstructions.length, 1);
     assert.match(sentInstructions[0], /处理这个文件/);
@@ -773,4 +775,118 @@ test("close: 停止 SSE 重连循环", async () => {
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+// ===== Task 9 功能验收新增(修订 plan) =====
+
+test("createMessageHandler: core 抛错时 reply 收到 ❌ 处理失败", async () => {
+  const replies = [];
+  const handler = createMessageHandler({
+    core: { handleMessage: async () => { throw new Error("boom"); } },
+    reply: async (chatId, text) => replies.push(text),
+  });
+  await handler({ message: { chat_id: "oc_x" } });
+  assert.equal(replies.length, 1);
+  assert.match(replies[0], /❌ 处理失败/);
+  assert.match(replies[0], /boom/);
+});
+
+test("handleMessage: 入站 file 消息 content 无 file_name → fallback 命名,downloadFile 仍被调", async () => {
+  const fs = await import("node:fs");
+  const sessionFile = "/tmp/test-sessions-inbox-noname.json";
+  fs.rmSync(sessionFile, { force: true });
+  const calls = [];
+  const core = createFeishuBotCore({
+    server: { onPermissionAsked: null, createSession: async () => "ses_n", sendMessage: async () => "ok", replyPermission: async () => {} },
+    allowedUsers: ["ou_me"],
+    sessionFile,
+    reply: () => {},
+    downloadFile: async (messageId, fileKey, fileName) => { calls.push({ fileKey, fileName }); return "/tmp/inbox-x"; },
+    sendPermissionAsk: () => {},
+    log: () => {},
+  });
+  const ret = await core.handleMessage({
+    message: { message_id: "om_n1", chat_id: "oc_n", message_type: "file",
+               content: JSON.stringify({ file_key: "fk_n" }), chat_type: "p2p" },
+    sender: { sender_id: { open_id: "ou_me" } },
+  });
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].fileKey, "fk_n");
+  assert.match(calls[0].fileName, /^file-/); // fallback 派生名
+  assert.match(ret, /已处理文件|处理这个文件|ok/);
+  fs.rmSync(sessionFile, { force: true });
+});
+
+test("handleMessage: 未授权用户发 file 消息 → 拒绝,downloadFile 不被调", async () => {
+  const fs = await import("node:fs");
+  const sessionFile = "/tmp/test-sessions-inbox-unauth.json";
+  fs.rmSync(sessionFile, { force: true });
+  let downloadCalls = 0;
+  const core = createFeishuBotCore({
+    server: { onPermissionAsked: null, createSession: async () => "ses_u", sendMessage: async () => "ok", replyPermission: async () => {} },
+    allowedUsers: ["ou_me"],
+    sessionFile,
+    reply: () => {},
+    downloadFile: async () => { downloadCalls++; return "/tmp/x"; },
+    sendPermissionAsk: () => {},
+    log: () => {},
+  });
+  const ret = await core.handleMessage({
+    message: { message_id: "om_u1", chat_id: "oc_u", message_type: "file",
+               content: JSON.stringify({ file_key: "fk_u", file_name: "a.html" }), chat_type: "p2p" },
+    sender: { sender_id: { open_id: "ou_stranger" } },
+  });
+  assert.match(ret, /未授权/);
+  assert.equal(downloadCalls, 0, "未授权用户不得触发文件下载");
+  fs.rmSync(sessionFile, { force: true });
+});
+
+test("handleMessage: 分享口令文本(标题在前 + b23.tv 短链)→ 识别为视频,summarizeVideo 收到短链 URL", async () => {
+  const fs = await import("node:fs");
+  const sessionFile = "/tmp/test-sessions-video-b23.json";
+  fs.rmSync(sessionFile, { force: true });
+  const receivedUrls = [];
+  const core = createFeishuBotCore({
+    server: { onPermissionAsked: null, createSession: async () => "ses_b", sendMessage: async () => "总结完成", replyPermission: async () => {} },
+    allowedUsers: ["ou_me"],
+    sessionFile,
+    reply: () => {},
+    summarizeVideo: async (url) => { receivedUrls.push(url); return { transcript: "字幕", strategy: "subtitle" }; },
+    sendPermissionAsk: () => {},
+    log: () => {},
+  });
+  const ret = await core.handleMessage({
+    message: { message_id: "om_b1", chat_id: "oc_b",
+               content: JSON.stringify({ text: "【五分钟带你看懂黑客松冠军的 Claude Code 配置-哔哩哔哩】 https://b23.tv/w7n1hl5" }),
+               chat_type: "p2p" },
+    sender: { sender_id: { open_id: "ou_me" } },
+  });
+  assert.equal(receivedUrls.length, 1);
+  assert.equal(receivedUrls[0], "https://b23.tv/w7n1hl5");
+  assert.match(ret, /总结完成/);
+  fs.rmSync(sessionFile, { force: true });
+});
+
+test("handleMessage: summarizeVideo 抛 ENOENT(yt-dlp 未装)→ 提示安装", async () => {
+  const fs = await import("node:fs");
+  const sessionFile = "/tmp/test-sessions-video-enoent.json";
+  fs.rmSync(sessionFile, { force: true });
+  const replies = [];
+  const core = createFeishuBotCore({
+    server: { onPermissionAsked: null, createSession: async () => "ses_e", sendMessage: async () => "x", replyPermission: async () => {} },
+    allowedUsers: ["ou_me"],
+    sessionFile,
+    reply: (chatId, text) => replies.push(text),
+    summarizeVideo: async () => { const e = new Error("spawn yt-dlp ENOENT"); throw e; },
+    sendPermissionAsk: () => {},
+    log: () => {},
+  });
+  const ret = await core.handleMessage({
+    message: { message_id: "om_e1", chat_id: "oc_e",
+               content: JSON.stringify({ text: "https://youtu.be/abc" }), chat_type: "p2p" },
+    sender: { sender_id: { open_id: "ou_me" } },
+  });
+  assert.match(ret, /请先安装 yt-dlp/);
+  assert.ok(replies.some((t) => /请先安装 yt-dlp/.test(t)), "reply 也应含安装提示");
+  fs.rmSync(sessionFile, { force: true });
 });

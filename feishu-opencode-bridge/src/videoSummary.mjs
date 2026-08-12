@@ -4,7 +4,7 @@ import { spawn } from "node:child_process";
 
 const DEFAULT_DOWNLOAD_DIR = "tmp/videos/";
 const YT_DLP_BIN = process.env.YT_DLP_BIN || "yt-dlp";
-const WHISPER_CMD = process.env.WHISPER_CMD || "";
+// WHISPER_CMD 在 summarizeVideo 内每次读取(而非模块加载时),便于测试注入
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || "";
 const OPENAI_BASE_URL = process.env.OPENAI_BASE_URL || "https://api.openai.com/v1";
 const WHISPER_MODEL = process.env.WHISPER_MODEL || "whisper-1";
@@ -45,8 +45,10 @@ export async function summarizeVideo(url, opts = {}) {
     onProgress("done", { strategy: "whisper-api" });
     return { title: basename(audioPath), transcript, transcriptPath: audioPath + ".txt", strategy: "whisper-api" };
   }
-  if (WHISPER_CMD) {
-    const transcript = await transcribeWithLocalWhisper(audioPath, WHISPER_CMD);
+  // WHISPER_CMD 每次读取,允许测试在运行期设置
+  const whisperCmd = process.env.WHISPER_CMD || "";
+  if (whisperCmd) {
+    const transcript = await transcribeWithLocalWhisper(audioPath, whisperCmd);
     onProgress("done", { strategy: "whisper-local" });
     return { title: basename(audioPath), transcript, transcriptPath: audioPath + ".txt", strategy: "whisper-local" };
   }

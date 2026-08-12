@@ -15,13 +15,17 @@ import { dirname, join } from "node:path";
 import { fetchWithRetry } from "./fetchWithRetry.mjs";
 import { formatErr } from "./errors.mjs";
 import { createSessionLog } from "./sessionLog.mjs";
-import { isPathSafe, extractFileReferences, parseFilePathCommand, validateExtension } from "./fileTransfer.mjs";
 
-// opencode serve POST /message 的超时:opencode 处理指令通常 10-60s,
-// 5s 太短会触发 AbortController → "This operation was aborted"。
-// 30s 是 POST 接口本身响应(不是指令执行完成)的合理上限;指令实际执行
-// 走轮询,默认 45min deadline。
-const POST_MESSAGE_TIMEOUT_MS = 30_000;
+// ---------- 内网请求超时常量 ----------
+
+// opencode serve 内网请求超时:opencode 处理指令通常 10-60s,超时太短会触发
+// AbortController → "This operation was aborted"。POST /message 若同步阻塞
+// (serve 等到指令执行完才返回),30s 也不保险——用 curl 计时确认后调整。
+const POST_MESSAGE_TIMEOUT_MS = 30_000;   // POST 指令(若确认同步阻塞则提到 60_000)
+const POLL_TIMEOUT_MS = 15_000;           // 轮询 GET /message(原 5000 太脆)
+const POLL_RETRIES = 3;                   // 轮询重试(原 retries: 1)
+const CREATE_SESSION_TIMEOUT_MS = 15_000; // createSession(原 5000)
+import { isPathSafe, extractFileReferences, parseFilePathCommand, validateExtension } from "./fileTransfer.mjs";
 
 // ---------- 纯函数 ----------
 
@@ -274,7 +278,7 @@ export function createOpenCodeServer(opts) {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ title: "feishu-bridge" }),
-      timeoutMs: 5000,
+      timeoutMs: CREATE_SESSION_TIMEOUT_MS,
       retries: 1,
     });
     const j = await r.json();
@@ -320,7 +324,7 @@ export function createOpenCodeServer(opts) {
     let lastParts = "";
     while (Date.now() < deadline) {
       try {
-        const mr = await fetchWithRetry(`${base}/session/${sessionID}/message`, { timeoutMs: 5000, retries: 1 });
+        const mr = await fetchWithRetry(`${base}/session/${sessionID}/message`, { timeoutMs: POLL_TIMEOUT_MS, retries: POLL_RETRIES });
         if (mr.status === 404) {
           // 会话在轮询期间失效:消息已发送但结果取不回来。抛错让外层自愈接管;
           // pollPhase 标记表明指令可能已执行,自愈时只重建不重发,避免重复执行。
@@ -614,8 +618,18 @@ export function createFeishuBotCore(opts) {
         await reply?.(chatId, errText);
         return errText;
       }
-      const fileName = fileInfo.file_name ?? "file";
-      if (!validateExtension(fileName)) {
+      // file_key 必须传给 downloadFile:下载资源接口 GET /im/v1/messages/{message_id}/resources/{file_key}
+      // path 需要 message_id + file_key 两个参数,只传 message_id 会报 "request miss file_key path argument"
+      const fileKey = fileInfo.file_key;
+      if (!fileKey) {
+        const errText = "❌ 文件消息缺少 file_key,无法下载";
+        await reply?.(chatId, errText);
+        return errText;
+      }
+      // 飞书 file 消息 content 通常只有 file_key,可能没有 file_name:
+      // 拿不到时用 message_id 派生名;仅"有扩展名"的文件做白名单校验,无扩展名不拒绝
+      const fileName = fileInfo.file_name ?? `file-${String(message.message_id).slice(-8)}`;
+      if (/\.[A-Za-z0-9]+$/.test(fileName) && !validateExtension(fileName)) {
         const errText = `❌ 不支持的文件类型:${fileName}(白名单:html/md/json/csv/png/pdf/...)`;
         await reply?.(chatId, errText);
         return errText;
@@ -623,7 +637,7 @@ export function createFeishuBotCore(opts) {
       await reply?.(chatId, `📥 已收到文件:${fileName},下载中…`);
       let absPath;
       try {
-        absPath = await downloadFile(message.message_id, fileName);
+        absPath = await downloadFile(message.message_id, fileKey, fileName);
       } catch (err) {
         const errText = `❌ 下载文件失败:${err?.message ?? err}`;
         await reply?.(chatId, errText);
@@ -695,8 +709,12 @@ export function createFeishuBotCore(opts) {
     }
 
     // 路由 0.7:视频 URL → 自动总结
-    const videoMatch = text.match(/^https?:\/\/(?:youtu\.be\/|youtube\.com\/watch\?v=|bilibili\.com\/video\/|v\.youku\.com\/|tv\.sohu\.com\/v\/|www\.bilibili\.com\/video\/)/i);
-    if (videoMatch && summarizeVideo) {
+    // 从文本任意位置提取首个 URL(用户发分享口令,如"【标题】 https://b23.tv/xxx",URL 不在开头)
+    const urlMatch = text.match(/https?:\/\/[^\s]+/i);
+    const videoUrl = urlMatch ? urlMatch[0] : null;
+    // 视频域名白名单(含 bilibili 短链 b23.tv;短链直接交 yt-dlp,其内置跟随重定向)
+    const VIDEO_URL_RE = /^(?:https?:\/\/)?(?:youtu\.be\/|youtube\.com\/watch\?v=|youtube\.com\/shorts\/|bilibili\.com\/video\/|www\.bilibili\.com\/video\/|b23\.tv\/|v\.youku\.com\/|tv\.sohu\.com\/v\/)/i;
+    if (videoUrl && VIDEO_URL_RE.test(videoUrl) && summarizeVideo) {
       return queued(chatId, async () => {
         const onProgress = (stage, info) => {
           const stageText = {
@@ -709,13 +727,16 @@ export function createFeishuBotCore(opts) {
           Promise.resolve(reply?.(chatId, `${stageText}${info?.strategy ? ` (${info.strategy})` : ""}`)).catch(() => {});
         };
         try {
-          const { transcript, strategy } = await summarizeVideo(text, { onProgress });
+          const { transcript, strategy } = await summarizeVideo(videoUrl, { onProgress });
           const instruction = `请总结以下视频字幕,提炼核心要点(分点列出,每点 1-2 句),并标注关键内容出现的大致时间戳。如果字幕不是中文,请翻译为中文后再总结。\n\n---\n${transcript}\n---\n`;
           return await runInstruction(chatId, instruction, {
-            sessionLabel: `VIDEO: ${text} (${strategy})`,
+            sessionLabel: `VIDEO: ${videoUrl} (${strategy})`,
           });
         } catch (err) {
-          const errText = `❌ 视频总结失败:${err?.message ?? err}`;
+          // yt-dlp 未安装时给针对性提示(ENOENT = spawn 找不到二进制)
+          const errText = /ENOENT|spawn .*yt-dlp/i.test(err?.message ?? "")
+            ? `❌ 视频总结失败:未找到 yt-dlp,请先安装 yt-dlp(brew install yt-dlp 或 pip install yt-dlp)`
+            : `❌ 视频总结失败:${err?.message ?? err}`;
           sessionLog?.append(chatId, `ERROR: ${formatErr(err)}`);
           metrics.messagesFailed++;
           await Promise.resolve(reply?.(chatId, errText)).catch(() => {});

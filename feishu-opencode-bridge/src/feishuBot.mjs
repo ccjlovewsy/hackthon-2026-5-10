@@ -1,7 +1,7 @@
 import "dotenv/config";
 import lark from "@larksuiteoapi/node-sdk";
 import { createServer } from "node:http";
-import { createWriteStream, readFileSync } from "node:fs";
+import { createWriteStream, readFileSync, statSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import { join, basename } from "node:path";
 import { pipeline } from "node:stream/promises";
@@ -20,6 +20,24 @@ import { summarizeVideo } from "./videoSummary.mjs";
  * - permission.asked 转发到飞书，用户回复「允许/拒绝/总是允许」审查放行
  * 本模块顶层无副作用，import 安全。
  */
+
+/**
+ * 构造 im.message.receive_v1 处理器。独立导出以便单测 catch 的错误回复。
+ * @param {{ core: object, reply: (chatId: string, text: string) => Promise<void> }} deps
+ */
+export function createMessageHandler({ core, reply }) {
+  return async (data) => {
+    try {
+      await core.handleMessage(data);
+    } catch (err) {
+      // 兜底：单条事件失败不影响后续事件与长连接；给用户回复错误,避免"发了消息没反应"
+      const chatId = data?.message?.chat_id;
+      if (chatId) {
+        await reply(chatId, `❌ 处理失败：${err?.message ?? err}\n可发 /kill 重置会话后重试。`).catch(() => {});
+      }
+    }
+  };
+}
 
 // 入口守卫：仅作为脚本直接运行时启动；被 import（如单测）时无副作用
 if (import.meta.url === `file://${process.argv[1]}`) {
@@ -69,8 +87,14 @@ if (import.meta.url === `file://${process.argv[1]}`) {
 
   async function sendFileToFeishu(chatId, absPath) {
     try {
+      const { size } = statSync(absPath);
+      if (size > 25 * 1024 * 1024) {
+        // 飞书单文件上限 25MB
+        await sendToFeishu(chatId, `❌ 文件超过飞书上限 25MB:${absPath}(${(size / 1024 / 1024).toFixed(1)}MB)`);
+        return;
+      }
       const fileBuf = readFileSync(absPath);
-      const fileName = absPath.split("/").pop();
+      const fileName = basename(absPath);
       const uploadResp = await client.im.file.create({
         data: { file_type: "stream", file_name: fileName, file: fileBuf },
       });
@@ -96,13 +120,16 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   }
 
   const INBOX_DIR = process.env.FEISHU_INBOX_DIR || new URL("../tmp/feishu-inbox/", import.meta.url).pathname;
-  await mkdir(INBOX_DIR, { recursive: true });
 
-  async function downloadInboxFile(messageId, fileName) {
-    const safeName = basename(fileName || "file");
+  async function downloadInboxFile(messageId, fileKey, fileName) {
+    await mkdir(INBOX_DIR, { recursive: true }); // 幂等
+    const safeName = basename(fileName || "file") || "file"; // 防越权:剥掉任何目录成分
     const absPath = join(INBOX_DIR, `${messageId}-${safeName}`);
+    // 下载资源接口 path 必须同时有 message_id 和 file_key:
+    // GET /im/v1/messages/{message_id}/resources/{file_key}?type=file
+    // 只传 message_id → SDK 校验报 "request miss file_key path argument"
     const resp = await client.im.messageResource.get({
-      path: { message_id: messageId },
+      path: { message_id: messageId, file_key: fileKey },
       params: { type: "file" },
     });
     const src = resp?.data ?? resp;
@@ -169,19 +196,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   });
 
   const eventDispatcher = new lark.EventDispatcher({}).register({
-    "im.message.receive_v1": async (data) => {
-      try {
-        await core.handleMessage(data);
-      } catch (err) {
-        // 兜底：单条事件失败不影响后续事件与长连接
-        logger.error("feishuBot", "事件处理失败", err);
-        // 给用户回复错误,避免"发了消息没反应"
-        const chatId = data?.message?.chat_id;
-        if (chatId) {
-          await sendToFeishu(chatId, `❌ 处理失败：${err?.message ?? err}\n可发 /kill 重置会话后重试。`).catch(() => {});
-        }
-      }
-    },
+    "im.message.receive_v1": createMessageHandler({ core, reply: sendToFeishu }),
     // 用户进入与机器人的单聊会话时，主动回复一条，验证链路在线
     // per-chatId 限流 30s：飞书长连接可能重推 access_event,避免连发多条欢迎消息
     "im.chat.access_event.bot_p2p_chat_entered_v1": async (data) => {
