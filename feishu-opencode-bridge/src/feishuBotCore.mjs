@@ -501,6 +501,80 @@ export function createFeishuBotCore(opts) {
   }
 
   /**
+   * 在已有 sessionID 上跑一条指令,处理自愈 + 出站文件检测。
+   * 路由 2(新指令)和路由 -1(入站文件)共用此 helper。
+   * @param {string} chatId
+   * @param {string} instruction 指令文本
+   * @param {object} opts
+   * @param {string} opts.sessionLabel 日志标签(如 "USER: xxx" 或 "FILE: xxx → yyy")
+   * @returns {Promise<string>} 回复文本
+   */
+  async function runInstruction(chatId, instruction, { sessionLabel }) {
+    const gen = chatGen.get(chatId) ?? 0;
+    let sessionID = sessionMap[chatId];
+    if (!sessionID) {
+      sessionID = await server.createSession();
+      metrics.sessionsCreated++;
+      sessionMap[chatId] = sessionID;
+      saveSessionMap(sessionFile, sessionMap);
+      log(`新会话: ${chatId} → ${sessionID}`);
+    }
+    sessionChat.set(sessionID, chatId);
+    log(`执行 (session ${sessionID}): ${JSON.stringify(instruction)}`);
+    sessionLog?.append(chatId, sessionLabel);
+    sessionLog?.append(chatId, `USER: ${instruction}`);
+
+    let outText;
+    try {
+      try {
+        outText = await server.sendMessage(sessionID, instruction);
+      } catch (err) {
+        if (!isSessionNotFound(err)) throw err;
+        if ((chatGen.get(chatId) ?? 0) !== gen) {
+          sessionLog?.append(chatId, `SESSION_INVALID(过期任务,已被 /kill 重置): ${formatErr(err)}`);
+          throw err;
+        }
+        sessionLog?.append(chatId, `SESSION_INVALID: ${formatErr(err)}`);
+        log(`会话 ${sessionID} 已失效,重建: ${formatErr(err)}`);
+        delete sessionMap[chatId];
+        saveSessionMap(sessionFile, sessionMap);
+        sessionChat.delete(sessionID);
+        sessionID = await server.createSession();
+        metrics.sessionsCreated++;
+        sessionMap[chatId] = sessionID;
+        saveSessionMap(sessionFile, sessionMap);
+        sessionChat.set(sessionID, chatId);
+        if (err.pollPhase) {
+          sessionLog?.append(chatId, "SESSION_INVALID(poll): 指令可能已执行,未自动重发,等待用户确认");
+          outText = "[会话失效] 指令已发送但结果获取失败(会话中途失效),会话已重建;若指令未执行,请重发。";
+        } else {
+          outText = await server.sendMessage(sessionID, instruction);
+        }
+      }
+    } catch (err) {
+      sessionLog?.append(chatId, `ERROR: ${formatErr(err)}`);
+      metrics.messagesFailed++;
+      throw err;
+    }
+    const replyText = (outText?.trim() || "(无输出)");
+    const finalText = replyText.length > 4000 ? `${replyText.slice(0, 4000)}\n…(已截断)` : replyText;
+    sessionLog?.append(chatId, `ASSISTANT: ${finalText.slice(0, 500)}`);
+    await reply?.(chatId, finalText);
+    metrics.messagesReplied++;
+    if (sendFile) {
+      const refs = extractFileReferences(outText, rootDir);
+      for (const absPath of refs.slice(0, 3)) {
+        if (validateExtension(absPath)) {
+          await sendFile?.(chatId, absPath).catch((e) =>
+            log(`自动发文件失败 ${absPath}: ${e?.message ?? e}`)
+          );
+        }
+      }
+    }
+    return finalText;
+  }
+
+  /**
    * 处理一条飞书消息。返回回复文本（或 undefined 表示不回复）。
    * 三条路由：强制重置（/kill） 或 确认授权回复（允许/拒绝） 或 新指令。
    */
@@ -557,65 +631,9 @@ export function createFeishuBotCore(opts) {
       }
       const instruction = `处理这个文件: ${absPath}`;
       log(`指令(文件) chat=${chatId}: ${JSON.stringify(instruction)}`);
-      return queued(chatId, async () => {
-        const gen = chatGen.get(chatId) ?? 0;
-        let sessionID = sessionMap[chatId];
-        if (!sessionID) {
-          sessionID = await server.createSession();
-          metrics.sessionsCreated++;
-          sessionMap[chatId] = sessionID;
-          saveSessionMap(sessionFile, sessionMap);
-          log(`新会话: ${chatId} → ${sessionID}`);
-        }
-        sessionChat.set(sessionID, chatId);
-        log(`执行 (session ${sessionID}): ${JSON.stringify(instruction)}`);
-        sessionLog?.append(chatId, `FILE: ${fileName} → ${absPath}`);
-        sessionLog?.append(chatId, `USER: ${instruction}`);
-        let outText;
-        try {
-          try {
-            outText = await server.sendMessage(sessionID, instruction);
-          } catch (err) {
-            if (!isSessionNotFound(err)) throw err;
-            if ((chatGen.get(chatId) ?? 0) !== gen) {
-              sessionLog?.append(chatId, `SESSION_INVALID(过期任务,已被 /kill 重置): ${formatErr(err)}`);
-              throw err;
-            }
-            sessionLog?.append(chatId, `SESSION_INVALID: ${formatErr(err)}`);
-            log(`会话 ${sessionID} 已失效,重建: ${formatErr(err)}`);
-            delete sessionMap[chatId];
-            saveSessionMap(sessionFile, sessionMap);
-            sessionChat.delete(sessionID);
-            sessionID = await server.createSession();
-            metrics.sessionsCreated++;
-            sessionMap[chatId] = sessionID;
-            saveSessionMap(sessionFile, sessionMap);
-            sessionChat.set(sessionID, chatId);
-            if (err.pollPhase) {
-              sessionLog?.append(chatId, "SESSION_INVALID(poll): 指令可能已执行,未自动重发,等待用户确认");
-              outText = "[会话失效] 指令已发送但结果获取失败(会话中途失效),会话已重建;若指令未执行,请重发。";
-            } else {
-              outText = await server.sendMessage(sessionID, instruction);
-            }
-          }
-        } catch (err) {
-          sessionLog?.append(chatId, `ERROR: ${formatErr(err)}`);
-          metrics.messagesFailed++;
-          throw err;
-        }
-        const replyText = (outText?.trim() || "(无输出)");
-        const finalText = replyText.length > 4000 ? `${replyText.slice(0, 4000)}\n…(已截断)` : replyText;
-        sessionLog?.append(chatId, `ASSISTANT: ${finalText.slice(0, 500)}`);
-        await reply?.(chatId, finalText);
-        metrics.messagesReplied++;
-        if (sendFile) {
-          const refs = extractFileReferences(outText, rootDir);
-          for (const p of refs.slice(0, 3)) {
-            if (validateExtension(p)) await sendFile?.(chatId, p).catch((e) => log(`自动发文件失败 ${p}: ${e?.message ?? e}`));
-          }
-        }
-        return finalText;
-      });
+      return queued(chatId, () => runInstruction(chatId, instruction, {
+        sessionLabel: `FILE: ${fileName} → ${absPath}`,
+      }));
     }
 
     if (!text) return undefined;
@@ -706,73 +724,7 @@ export function createFeishuBotCore(opts) {
 
     // 路由 2：新指令
     log(`指令 chat=${chatId}: ${JSON.stringify(text)}`);
-    return queued(chatId, async () => {
-      const gen = chatGen.get(chatId) ?? 0; // 记录本任务的代次,自愈写回前校验
-      let sessionID = sessionMap[chatId];
-      if (!sessionID) {
-        sessionID = await server.createSession();
-        metrics.sessionsCreated++;
-        sessionMap[chatId] = sessionID;
-        saveSessionMap(sessionFile, sessionMap);
-        log(`新会话: ${chatId} → ${sessionID}`);
-      }
-      sessionChat.set(sessionID, chatId);
-      log(`执行 (session ${sessionID}): ${JSON.stringify(text)}`);
-      sessionLog?.append(chatId, `USER: ${text}`);
-
-      let outText;
-      try {
-        try {
-          outText = await server.sendMessage(sessionID, text);
-        } catch (err) {
-          if (!isSessionNotFound(err)) throw err;
-          if ((chatGen.get(chatId) ?? 0) !== gen) {
-            // /kill 已重置该会话:旧队列任务不得再写回 sessionMap,否则会覆盖 /kill 后新建的会话
-            sessionLog?.append(chatId, `SESSION_INVALID(过期任务,已被 /kill 重置): ${formatErr(err)}`);
-            throw err;
-          }
-          sessionLog?.append(chatId, `SESSION_INVALID: ${formatErr(err)}`);
-          log(`会话 ${sessionID} 已失效,重建: ${formatErr(err)}`);
-          delete sessionMap[chatId];
-          saveSessionMap(sessionFile, sessionMap);
-          sessionChat.delete(sessionID);
-          sessionID = await server.createSession();
-          metrics.sessionsCreated++;
-          sessionMap[chatId] = sessionID;
-          saveSessionMap(sessionFile, sessionMap);
-          sessionChat.set(sessionID, chatId);
-          if (err.pollPhase) {
-            // 轮询期间 404:指令可能已执行,重发有重复执行风险,只重建不重发,提示用户确认
-            sessionLog?.append(chatId, "SESSION_INVALID(poll): 指令可能已执行,未自动重发,等待用户确认");
-            outText = "[会话失效] 指令已发送但结果获取失败(会话中途失效),会话已重建;若指令未执行,请重发。";
-          } else {
-            outText = await server.sendMessage(sessionID, text); // 重建后重发一次;再失败直接抛
-          }
-        }
-      } catch (err) {
-        // sendMessage 失败(含自愈重发仍失败)记 ERROR;reply 在 try 外,失败不记 SESSION_INVALID
-        sessionLog?.append(chatId, `ERROR: ${formatErr(err)}`);
-        metrics.messagesFailed++;
-        throw err;
-      }
-      const replyText = outText.trim() || "(无输出)";
-      const finalText = replyText.length > 4000 ? `${replyText.slice(0, 4000)}\n…(已截断)` : replyText;
-      sessionLog?.append(chatId, `ASSISTANT: ${finalText.slice(0, 500)}`);
-      await reply?.(chatId, finalText);
-      metrics.messagesReplied++;
-      // 出站文件自动检测:opencode 输出文本里出现 rootDir 子树内真实存在的文件路径 → 自动发文件
-      if (sendFile) {
-        const refs = extractFileReferences(outText, rootDir);
-        for (const absPath of refs.slice(0, 3)) {
-          if (validateExtension(absPath)) {
-            await sendFile?.(chatId, absPath).catch((e) =>
-              log(`自动发文件失败 ${absPath}: ${e?.message ?? e}`)
-            );
-          }
-        }
-      }
-      return finalText;
-    });
+    return queued(chatId, () => runInstruction(chatId, text, { sessionLabel: `USER: ${text}` }));
   }
 
   return {
