@@ -515,8 +515,6 @@ export function createFeishuBotCore(opts) {
     }
 
     const text = extractMessageText(message);
-    if (!text) return undefined;
-
     const chatId = message.chat_id;
     if (!chatId) {
       log(`消息缺少 chat_id，忽略: ${message.message_id}`);
@@ -531,6 +529,96 @@ export function createFeishuBotCore(opts) {
       await reply?.(chatId, denied);
       return denied;
     }
+
+    // 路由 -1:入站文件消息(用户拖文件进会话)
+    if (message.message_type === "file" && downloadFile) {
+      let fileInfo;
+      try {
+        fileInfo = JSON.parse(message.content ?? "{}");
+      } catch {
+        const errText = "❌ 无法解析文件消息体";
+        await reply?.(chatId, errText);
+        return errText;
+      }
+      const fileName = fileInfo.file_name ?? "file";
+      if (!validateExtension(fileName)) {
+        const errText = `❌ 不支持的文件类型:${fileName}(白名单:html/md/json/csv/png/pdf/...)`;
+        await reply?.(chatId, errText);
+        return errText;
+      }
+      await reply?.(chatId, `📥 已收到文件:${fileName},下载中…`);
+      let absPath;
+      try {
+        absPath = await downloadFile(message.message_id, fileName);
+      } catch (err) {
+        const errText = `❌ 下载文件失败:${err?.message ?? err}`;
+        await reply?.(chatId, errText);
+        return errText;
+      }
+      const instruction = `处理这个文件: ${absPath}`;
+      log(`指令(文件) chat=${chatId}: ${JSON.stringify(instruction)}`);
+      return queued(chatId, async () => {
+        const gen = chatGen.get(chatId) ?? 0;
+        let sessionID = sessionMap[chatId];
+        if (!sessionID) {
+          sessionID = await server.createSession();
+          metrics.sessionsCreated++;
+          sessionMap[chatId] = sessionID;
+          saveSessionMap(sessionFile, sessionMap);
+          log(`新会话: ${chatId} → ${sessionID}`);
+        }
+        sessionChat.set(sessionID, chatId);
+        log(`执行 (session ${sessionID}): ${JSON.stringify(instruction)}`);
+        sessionLog?.append(chatId, `FILE: ${fileName} → ${absPath}`);
+        sessionLog?.append(chatId, `USER: ${instruction}`);
+        let outText;
+        try {
+          try {
+            outText = await server.sendMessage(sessionID, instruction);
+          } catch (err) {
+            if (!isSessionNotFound(err)) throw err;
+            if ((chatGen.get(chatId) ?? 0) !== gen) {
+              sessionLog?.append(chatId, `SESSION_INVALID(过期任务,已被 /kill 重置): ${formatErr(err)}`);
+              throw err;
+            }
+            sessionLog?.append(chatId, `SESSION_INVALID: ${formatErr(err)}`);
+            log(`会话 ${sessionID} 已失效,重建: ${formatErr(err)}`);
+            delete sessionMap[chatId];
+            saveSessionMap(sessionFile, sessionMap);
+            sessionChat.delete(sessionID);
+            sessionID = await server.createSession();
+            metrics.sessionsCreated++;
+            sessionMap[chatId] = sessionID;
+            saveSessionMap(sessionFile, sessionMap);
+            sessionChat.set(sessionID, chatId);
+            if (err.pollPhase) {
+              sessionLog?.append(chatId, "SESSION_INVALID(poll): 指令可能已执行,未自动重发,等待用户确认");
+              outText = "[会话失效] 指令已发送但结果获取失败(会话中途失效),会话已重建;若指令未执行,请重发。";
+            } else {
+              outText = await server.sendMessage(sessionID, instruction);
+            }
+          }
+        } catch (err) {
+          sessionLog?.append(chatId, `ERROR: ${formatErr(err)}`);
+          metrics.messagesFailed++;
+          throw err;
+        }
+        const replyText = (outText?.trim() || "(无输出)");
+        const finalText = replyText.length > 4000 ? `${replyText.slice(0, 4000)}\n…(已截断)` : replyText;
+        sessionLog?.append(chatId, `ASSISTANT: ${finalText.slice(0, 500)}`);
+        await reply?.(chatId, finalText);
+        metrics.messagesReplied++;
+        if (sendFile) {
+          const refs = extractFileReferences(outText, rootDir);
+          for (const p of refs.slice(0, 3)) {
+            if (validateExtension(p)) await sendFile?.(chatId, p).catch((e) => log(`自动发文件失败 ${p}: ${e?.message ?? e}`));
+          }
+        }
+        return finalText;
+      });
+    }
+
+    if (!text) return undefined;
 
     // 路由 0：强制重置卡死会话
     if (text === "/kill" || text === "/reset") {

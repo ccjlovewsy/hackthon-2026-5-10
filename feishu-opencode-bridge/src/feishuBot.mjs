@@ -1,7 +1,10 @@
 import "dotenv/config";
 import lark from "@larksuiteoapi/node-sdk";
 import { createServer } from "node:http";
-import { readFileSync } from "node:fs";
+import { createWriteStream, readFileSync } from "node:fs";
+import { mkdir } from "node:fs/promises";
+import { join, basename } from "node:path";
+import { pipeline } from "node:stream/promises";
 import { createFeishuBotCore, createOpenCodeServer, parseAllowedUsers } from "./feishuBotCore.mjs";
 import { setupGlobalErrorHandler } from "./globalErrorHandler.mjs";
 import { createLogger } from "./logger.mjs";
@@ -91,6 +94,22 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     }
   }
 
+  const INBOX_DIR = process.env.FEISHU_INBOX_DIR || new URL("../tmp/feishu-inbox/", import.meta.url).pathname;
+  await mkdir(INBOX_DIR, { recursive: true });
+
+  async function downloadInboxFile(messageId, fileName) {
+    const safeName = basename(fileName || "file");
+    const absPath = join(INBOX_DIR, `${messageId}-${safeName}`);
+    const resp = await client.im.messageResource.get({
+      path: { message_id: messageId },
+      params: { type: "file" },
+    });
+    const src = resp?.data ?? resp;
+    await pipeline(src, createWriteStream(absPath));
+    logger.info("feishuBot", `已下载入站文件: ${absPath}`);
+    return absPath;
+  }
+
   const server = createOpenCodeServer({
     cmd: OPENCODE_CMD,
     port: OPENCODE_SERVE_PORT,
@@ -105,6 +124,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     sessionFile: SESSION_FILE,
     reply: sendToFeishu,
     sendFile: sendFileToFeishu,
+    downloadFile: downloadInboxFile,
     sendPermissionAsk: (chatId, askText) => sendToFeishu(chatId, askText),
     log: (msg) => logger.info("feishuBotCore", msg),
     sessionLogDir: SESSION_LOG_DIR,

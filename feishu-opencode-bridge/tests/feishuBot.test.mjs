@@ -563,6 +563,89 @@ test("handleMessage: opencode 输出文本含 rootDir 子树内真实文件 → 
   }
 });
 
+test("handleMessage: 入站 file 消息 → downloadFile + 包装指令发 opencode", async () => {
+  const fs = await import("node:fs");
+  const os = await import("node:os");
+  const path = await import("node:path");
+  const inboxRoot = fs.mkdtempSync(path.join(os.tmpdir(), "inbox-"));
+  try {
+    const fakeHtmlPath = path.join(inboxRoot, "om_in1-test.html");
+    fs.writeFileSync(fakeHtmlPath, "<html/>");
+    const sessionFile = "/tmp/test-sessions-inbox.json";
+    fs.rmSync(sessionFile, { force: true });
+    const sentInstructions = [];
+    const fakeServer = {
+      onPermissionAsked: null,
+      createSession: async () => "ses_in",
+      sendMessage: async (sid, text) => { sentInstructions.push(text); return "已处理 HTML"; },
+      replyPermission: async () => {},
+    };
+    const replies = [];
+    const downloadedFiles = [];
+    const core = createFeishuBotCore({
+      server: fakeServer,
+      allowedUsers: ["ou_me"],
+      sessionFile,
+      reply: (chatId, text) => replies.push(text),
+      sendPermissionAsk: () => {},
+      downloadFile: async (messageId, fileName) => {
+        const p = path.join(inboxRoot, `${messageId}-${fileName}`);
+        downloadedFiles.push({ messageId, fileName, p });
+        return p;
+      },
+      log: () => {},
+      rootDir: inboxRoot,
+    });
+    const ret = await core.handleMessage({
+      message: {
+        message_id: "om_in1",
+        chat_id: "oc_in",
+        message_type: "file",
+        content: JSON.stringify({ file_key: "fk_x", file_name: "test.html" }),
+        chat_type: "p2p",
+      },
+      sender: { sender_id: { open_id: "ou_me" } },
+    });
+    assert.equal(downloadedFiles.length, 1);
+    assert.equal(downloadedFiles[0].fileName, "test.html");
+    assert.equal(sentInstructions.length, 1);
+    assert.match(sentInstructions[0], /处理这个文件/);
+    assert.match(sentInstructions[0], /test\.html/);
+    assert.ok(replies.some((t) => /已收到文件/.test(t)), "应先回复'已收到文件'");
+    assert.match(ret, /已处理 HTML/);
+    fs.rmSync(sessionFile, { force: true });
+  } finally {
+    fs.rmSync(inboxRoot, { recursive: true, force: true });
+  }
+});
+
+test("handleMessage: 入站 file 消息 扩展名不允许 → 拒绝", async () => {
+  const fs = await import("node:fs");
+  const sessionFile = "/tmp/test-sessions-inbox-deny.json";
+  fs.rmSync(sessionFile, { force: true });
+  const core = createFeishuBotCore({
+    server: { onPermissionAsked: null, createSession: async () => "ses_x", sendMessage: async () => "ok", replyPermission: async () => {} },
+    allowedUsers: ["ou_me"],
+    sessionFile,
+    reply: () => {},
+    downloadFile: async () => "/tmp/whatever",
+    sendPermissionAsk: () => {},
+    log: () => {},
+  });
+  const ret = await core.handleMessage({
+    message: {
+      message_id: "om_in2",
+      chat_id: "oc_in2",
+      message_type: "file",
+      content: JSON.stringify({ file_key: "fk_y", file_name: "evil.exe" }),
+      chat_type: "p2p",
+    },
+    sender: { sender_id: { open_id: "ou_me" } },
+  });
+  assert.match(ret, /不支持的文件类型/);
+  fs.rmSync(sessionFile, { force: true });
+});
+
 test("close: 停止 SSE 重连循环", async () => {
   const originalFetch = globalThis.fetch;
   let fetchCalls = 0;
