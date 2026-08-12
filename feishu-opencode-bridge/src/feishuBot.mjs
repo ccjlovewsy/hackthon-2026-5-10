@@ -1,6 +1,7 @@
 import "dotenv/config";
 import lark from "@larksuiteoapi/node-sdk";
 import { createServer } from "node:http";
+import { readFileSync } from "node:fs";
 import { createFeishuBotCore, createOpenCodeServer, parseAllowedUsers } from "./feishuBotCore.mjs";
 import { setupGlobalErrorHandler } from "./globalErrorHandler.mjs";
 import { createLogger } from "./logger.mjs";
@@ -62,6 +63,34 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     }
   }
 
+  async function sendFileToFeishu(chatId, absPath) {
+    try {
+      const fileBuf = readFileSync(absPath);
+      const fileName = absPath.split("/").pop();
+      const uploadResp = await client.im.file.create({
+        data: { file_type: "stream", file_name: fileName, file: fileBuf },
+      });
+      const fileKey = uploadResp?.data?.file_key;
+      if (!fileKey) {
+        logger.error("feishuBot", "文件上传失败", uploadResp);
+        await sendToFeishu(chatId, `❌ 文件上传失败:${JSON.stringify(uploadResp).slice(0, 200)}`);
+        return;
+      }
+      const msgResp = await client.im.message.create({
+        params: { receive_id_type: "chat_id" },
+        data: {
+          receive_id: chatId,
+          msg_type: "file",
+          content: JSON.stringify({ file_key: fileKey }),
+        },
+      });
+      logger.info("feishuBot", `已发文件 chat=${chatId}: ${fileName} message_id=${msgResp?.data?.message_id ?? "?"}`);
+    } catch (err) {
+      logger.error("feishuBot", "发文件失败", err);
+      await sendToFeishu(chatId, `❌ 发文件失败:${err?.message ?? err}`).catch(() => {});
+    }
+  }
+
   const server = createOpenCodeServer({
     cmd: OPENCODE_CMD,
     port: OPENCODE_SERVE_PORT,
@@ -75,9 +104,11 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     allowedUsers,
     sessionFile: SESSION_FILE,
     reply: sendToFeishu,
+    sendFile: sendFileToFeishu,
     sendPermissionAsk: (chatId, askText) => sendToFeishu(chatId, askText),
     log: (msg) => logger.info("feishuBotCore", msg),
     sessionLogDir: SESSION_LOG_DIR,
+    rootDir: OPENCODE_DIR,
   });
 
   // 进度推送端点：POST /progress {"text":"...","chat_id":"..."} 复用已认证的 sendToFeishu

@@ -467,6 +467,102 @@ test("handleMessage: sendMessage 非 404 错误时抛出,让 feishuBot.mjs catch
   fs.rmSync(sessionFile, { force: true });
 });
 
+test("handleMessage: /file <path> 命中 → sendFile 被调一次 + 路径正确", async () => {
+  const fs = await import("node:fs");
+  const os = await import("node:os");
+  const path = await import("node:path");
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "ft-route-"));
+  try {
+    fs.writeFileSync(path.join(root, "x.html"), "<html/>");
+    const sessionFile = "/tmp/test-sessions-file-route.json";
+    fs.rmSync(sessionFile, { force: true });
+    const sentFiles = [];
+    const core = createFeishuBotCore({
+      server: { onPermissionAsked: null, createSession: async () => "ses_x", sendMessage: async () => "ok", replyPermission: async () => {} },
+      allowedUsers: ["ou_me"],
+      sessionFile,
+      reply: () => {},
+      sendFile: (chatId, absPath) => { sentFiles.push({ chatId, absPath }); return Promise.resolve(); },
+      sendPermissionAsk: () => {},
+      log: () => {},
+      rootDir: root,
+    });
+    const ret = await core.handleMessage({
+      message: { message_id: "om_f1", chat_id: "oc_f", content: JSON.stringify({ text: `/file ${root}/x.html` }), chat_type: "p2p" },
+      sender: { sender_id: { open_id: "ou_me" } },
+    });
+    assert.equal(sentFiles.length, 1);
+    assert.ok(sentFiles[0].absPath.endsWith("x.html"));
+    assert.match(ret, /已发送/);
+    fs.rmSync(sessionFile, { force: true });
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("handleMessage: /file /etc/passwd 越权 → sendFile 不调 + reply 给越权提示", async () => {
+  const fs = await import("node:fs");
+  const sessionFile = "/tmp/test-sessions-file-deny.json";
+  fs.rmSync(sessionFile, { force: true });
+  const sentFiles = [];
+  const replies = [];
+  const core = createFeishuBotCore({
+    server: { onPermissionAsked: null, createSession: async () => "ses_x", sendMessage: async () => "ok", replyPermission: async () => {} },
+    allowedUsers: ["ou_me"],
+    sessionFile,
+    reply: (chatId, text) => replies.push(text),
+    sendFile: (chatId, absPath) => { sentFiles.push(absPath); return Promise.resolve(); },
+    sendPermissionAsk: () => {},
+    log: () => {},
+    rootDir: "/Users/issuser/code/hackthon-2026-5-10",
+  });
+  await core.handleMessage({
+    message: { message_id: "om_f2", chat_id: "oc_f", content: JSON.stringify({ text: "/file /etc/passwd" }), chat_type: "p2p" },
+    sender: { sender_id: { open_id: "ou_me" } },
+  });
+  assert.equal(sentFiles.length, 0, "越权路径不应调 sendFile");
+  assert.ok(replies.some((t) => /越权/.test(t)), "应回复越权提示");
+  fs.rmSync(sessionFile, { force: true });
+});
+
+test("handleMessage: opencode 输出文本含 rootDir 子树内真实文件 → sendFile 自动发", async () => {
+  const fs = await import("node:fs");
+  const os = await import("node:os");
+  const path = await import("node:path");
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "ft-out-"));
+  try {
+    fs.writeFileSync(path.join(root, "hello.html"), "<html/>");
+    const sessionFile = "/tmp/test-sessions-out-detect.json";
+    fs.rmSync(sessionFile, { force: true });
+    const sentFiles = [];
+    const fakeServer = {
+      onPermissionAsked: null,
+      createSession: async () => "ses_out",
+      sendMessage: async () => `已生成文件: ${path.join(root, "hello.html")}`,
+      replyPermission: async () => {},
+    };
+    const core = createFeishuBotCore({
+      server: fakeServer,
+      allowedUsers: ["ou_me"],
+      sessionFile,
+      reply: () => {},
+      sendFile: (chatId, absPath) => { sentFiles.push(absPath); return Promise.resolve(); },
+      sendPermissionAsk: () => {},
+      log: () => {},
+      rootDir: root,
+    });
+    await core.handleMessage({
+      message: { message_id: "om_o1", chat_id: "oc_o", content: JSON.stringify({ text: "生成 hello.html" }), chat_type: "p2p" },
+      sender: { sender_id: { open_id: "ou_me" } },
+    });
+    assert.equal(sentFiles.length, 1, "应自动发一个文件");
+    assert.ok(sentFiles[0].endsWith("hello.html"));
+    fs.rmSync(sessionFile, { force: true });
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("close: 停止 SSE 重连循环", async () => {
   const originalFetch = globalThis.fetch;
   let fetchCalls = 0;

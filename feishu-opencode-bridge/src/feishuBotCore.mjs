@@ -15,6 +15,7 @@ import { dirname, join } from "node:path";
 import { fetchWithRetry } from "./fetchWithRetry.mjs";
 import { formatErr } from "./errors.mjs";
 import { createSessionLog } from "./sessionLog.mjs";
+import { isPathSafe, extractFileReferences, parseFilePathCommand, validateExtension } from "./fileTransfer.mjs";
 
 // opencode serve POST /message 的超时:opencode 处理指令通常 10-60s,
 // 5s 太短会触发 AbortController → "This operation was aborted"。
@@ -414,24 +415,32 @@ function saveSessionMap(file, map) {
 
 // ---------- 桥主体 ----------
 
-/**
- * 创建飞书 → opencode 桥核心。
- * @param {object} opts
- * @param {object} opts.server createOpenCodeServer 返回的客户端实例
- * @param {string[]} opts.allowedUsers 授权用户 id 列表（小写）
- * @param {string} opts.sessionFile 会话映射持久化文件路径
- * @param {(chatId: string, text: string) => Promise<void>|void} opts.reply 回复回调
+ /**
+  * 创建飞书 → opencode 桥核心。
+  * @param {object} opts
+  * @param {object} opts.server createOpenCodeServer 返回的客户端实例
+  * @param {string[]} opts.allowedUsers 授权用户 id 列表（小写）
+  * @param {string} opts.sessionFile 会话映射持久化文件路径
+  * @param {(chatId: string, text: string) => Promise<void>|void} opts.reply 回复回调
+  * @param {(chatId: string, absPath: string) => Promise<void>|void} [opts.sendFile] 发送文件回调(飞书 file 消息)
+ * @param {(messageId: string, fileName: string) => Promise<string>} [opts.downloadFile] 下载入站文件回调,返回落地 absPath
+ * @param {(url: string, opts: object) => Promise<object>} [opts.summarizeVideo] 视频总结函数
  * @param {(chatId: string, askText: string, requestID: string) => Promise<void>|void} opts.sendPermissionAsk 权限审查请求回调
- * @param {string} [opts.sessionLogDir] 每会话日志目录；不传则不启用 /log 查询
- * @param {(msg: string) => void} [opts.log]
- */
+  * @param {string} [opts.rootDir] 工作目录根(路径安全校验用,默认 process.cwd())
+  * @param {string} [opts.sessionLogDir] 每会话日志目录；不传则不启用 /log 查询
+  * @param {(msg: string) => void} [opts.log]
+  */
 export function createFeishuBotCore(opts) {
   const {
     server,
     allowedUsers,
     sessionFile,
     reply,
+    sendFile,
+    downloadFile,
+    summarizeVideo,
     sendPermissionAsk,
+    rootDir = process.cwd(),
     log = (msg) => console.log(`[feishuBot] ${msg}`),
     sessionLogDir,
   } = opts;
@@ -556,6 +565,29 @@ export function createFeishuBotCore(opts) {
       return finalOut;
     }
 
+    // 路由 0.6:发送本地文件到飞书
+    if (text.startsWith("/file")) {
+      const parsedFile = parseFilePathCommand(text, rootDir);
+      if (!parsedFile.ok) {
+        const errText = `❌ ${parsedFile.reason}`;
+        await reply?.(chatId, errText);
+        return errText;
+      }
+      if (!sendFile) {
+        const errText = "❌ 桥未配置文件发送能力(sendFile 回调缺失)";
+        await reply?.(chatId, errText);
+        return errText;
+      }
+      if (!validateExtension(parsedFile.absPath)) {
+        const errText = `❌ 不支持的文件类型:${parsedFile.absPath}`;
+        await reply?.(chatId, errText);
+        return errText;
+      }
+      await sendFile(chatId, parsedFile.absPath);
+      const okText = `📎 已发送:${parsedFile.absPath}`;
+      return okText;
+    }
+
     // 路由 1：确认授权回复
     const parsed = parseApprovalReply(text);
     if (parsed) {
@@ -640,6 +672,17 @@ export function createFeishuBotCore(opts) {
       sessionLog?.append(chatId, `ASSISTANT: ${finalText.slice(0, 500)}`);
       await reply?.(chatId, finalText);
       metrics.messagesReplied++;
+      // 出站文件自动检测:opencode 输出文本里出现 rootDir 子树内真实存在的文件路径 → 自动发文件
+      if (sendFile) {
+        const refs = extractFileReferences(outText, rootDir);
+        for (const absPath of refs.slice(0, 3)) {
+          if (validateExtension(absPath)) {
+            await sendFile?.(chatId, absPath).catch((e) =>
+              log(`自动发文件失败 ${absPath}: ${e?.message ?? e}`)
+            );
+          }
+        }
+      }
       return finalText;
     });
   }
