@@ -14,8 +14,9 @@ test("summarizeVideo: 字幕直取成功(策略 subtitle)", async () => {
   try {
     _setRunCmdOverride((cmd, args) => {
       if (cmd === "yt-dlp" && args.includes("--skip-download")) {
-        const subPath = join(tmpRoot, "abc.txt");
-        writeFileSync(subPath, "这是字幕内容,长度足够通过最小阈值检查,需要超过五十字符才能通过验证。这是字幕内容,长度足够通过最小阈值检查。");
+        // 模拟 yt-dlp 写出 .vtt 字幕文件(fetchSubtitle 内部会剥成 .txt)
+        const subPath = join(tmpRoot, "abc.vtt");
+        writeFileSync(subPath, "WEBVTT\n\n00:00:01.000 --> 00:00:03.000\n这是字幕内容,长度足够通过最小阈值检查,需要超过五十字符才能通过验证。这是字幕内容,长度足够通过最小阈值检查。\n");
         return Promise.resolve({ code: 0, stdout: "视频标题\n", stderr: "" });
       }
       return Promise.resolve({ code: 1, stdout: "", stderr: "unknown" });
@@ -149,8 +150,9 @@ test("summarizeVideo: 未配置 VIDEO_MAX_DURATION_SEC → 不传 --match-filter
     _setRunCmdOverride((cmd, args) => {
       if (args.includes("--match-filter")) sawMatchFilter = true;
       if (cmd === "yt-dlp" && args.includes("--skip-download")) {
-        const subPath = join(tmpRoot, "abc.txt");
-        writeFileSync(subPath, "这是字幕内容,长度足够通过最小阈值检查,需要超过五十字符才能通过验证。这是字幕内容,长度足够通过最小阈值检查。");
+        // 模拟 yt-dlp 写出 .vtt 字幕文件(fetchSubtitle 内部会剥成 .txt)
+        const subPath = join(tmpRoot, "abc.vtt");
+        writeFileSync(subPath, "WEBVTT\n\n00:00:01.000 --> 00:00:03.000\n这是字幕内容,长度足够通过最小阈值检查,需要超过五十字符才能通过验证。这是字幕内容,长度足够通过最小阈值检查。\n");
         return Promise.resolve({ code: 0, stdout: "视频标题\n", stderr: "" });
       }
       return Promise.resolve({ code: 1, stdout: "", stderr: "unknown" });

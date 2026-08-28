@@ -1,0 +1,804 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>主题 1-1 · VisitGlobalRoots no-op 导致 STW root 全丢</title>
+<style>
+  :root {
+    --bg: #0f1117;
+    --panel: #1a1d27;
+    --panel-2: #20232f;
+    --border: #2a2e3c;
+    --text: #e6e8ee;
+    --muted: #8b8f9c;
+    --primary: #7F52FF;
+    --primary-soft: rgba(127, 82, 255, 0.15);
+    --red: #ff5c5c;
+    --red-soft: rgba(255, 92, 92, 0.12);
+    --green: #4ade80;
+    --green-soft: rgba(74, 222, 128, 0.12);
+    --yellow: #fbbf24;
+    --yellow-soft: rgba(251, 191, 36, 0.12);
+    --blue: #60a5fa;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    line-height: 1.65;
+    -webkit-font-smoothing: antialiased;
+  }
+  code, pre, .mono {
+    font-family: "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
+  }
+  .wrap {
+    max-width: 1100px;
+    margin: 0 auto;
+    padding: 40px 24px 80px;
+  }
+
+  /* HERO */
+  .hero {
+    background: linear-gradient(135deg, rgba(127, 82, 255, 0.12), rgba(255, 92, 92, 0.08));
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 36px 32px;
+    margin-bottom: 32px;
+    position: relative;
+    overflow: hidden;
+  }
+  .hero::before {
+    content: "";
+    position: absolute; top: -50%; right: -10%;
+    width: 400px; height: 400px;
+    background: radial-gradient(circle, rgba(127, 82, 255, 0.25), transparent 70%);
+    pointer-events: none;
+  }
+  .badge {
+    display: inline-flex; align-items: center; gap: 6px;
+    background: var(--red-soft);
+    border: 1px solid rgba(255, 92, 92, 0.3);
+    color: var(--red);
+    padding: 4px 12px;
+    border-radius: 999px;
+    font-size: 12px;
+    font-weight: 600;
+    margin-bottom: 16px;
+    letter-spacing: 0.5px;
+  }
+  .badge .dot { width: 6px; height: 6px; background: var(--red); border-radius: 50%; }
+  h1 {
+    margin: 0 0 12px;
+    font-size: 28px;
+    line-height: 1.3;
+    position: relative;
+  }
+  .hero .sub {
+    color: var(--muted);
+    font-size: 14px;
+    position: relative;
+  }
+  .hero .sub code { color: var(--blue); }
+
+  /* META GRID */
+  .meta-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 12px;
+    margin-bottom: 32px;
+  }
+  .meta-card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 16px 18px;
+  }
+  .meta-card .label {
+    font-size: 11px;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    margin-bottom: 6px;
+  }
+  .meta-card .value {
+    font-family: "JetBrains Mono", "SF Mono", Menlo, monospace;
+    font-size: 13px;
+    word-break: break-all;
+  }
+  .meta-card .value.commit { color: var(--primary); }
+
+  /* SECTION */
+  section {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 28px 28px 24px;
+    margin-bottom: 24px;
+  }
+  section > h2 {
+    margin: 0 0 8px;
+    font-size: 20px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .num {
+    display: inline-flex;
+    width: 28px; height: 28px;
+    background: var(--primary);
+    color: white;
+    border-radius: 8px;
+    align-items: center; justify-content: center;
+    font-size: 14px;
+    font-weight: 700;
+  }
+  section > .lead {
+    color: var(--muted);
+    margin: 0 0 20px;
+    font-size: 14px;
+  }
+
+  /* SYMPTOM CALLOUT */
+  .callout {
+    border-left: 4px solid var(--red);
+    background: var(--red-soft);
+    padding: 16px 20px;
+    border-radius: 0 12px 12px 0;
+    margin: 16px 0;
+    font-size: 15px;
+  }
+  .callout strong { color: var(--red); }
+  .callout.green { border-color: var(--green); background: var(--green-soft); }
+  .callout.green strong { color: var(--green); }
+  .callout.yellow { border-color: var(--yellow); background: var(--yellow-soft); }
+  .callout.yellow strong { color: var(--yellow); }
+
+  /* CODE BLOCKS */
+  .code-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+    margin: 16px 0;
+  }
+  @media (max-width: 800px) {
+    .code-grid { grid-template-columns: 1fr; }
+  }
+  .code-card {
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    overflow: hidden;
+  }
+  .code-card .head {
+    padding: 10px 16px;
+    border-bottom: 1px solid var(--border);
+    font-size: 13px;
+    font-weight: 600;
+    display: flex; justify-content: space-between; align-items: center;
+  }
+  .code-card .head .tag {
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-weight: 600;
+  }
+  .tag.bad { background: var(--red-soft); color: var(--red); }
+  .tag.good { background: var(--green-soft); color: var(--green); }
+  .code-card pre {
+    margin: 0;
+    padding: 16px;
+    overflow-x: auto;
+    font-size: 12.5px;
+    line-height: 1.6;
+  }
+  .code-card pre .c { color: #6b7280; font-style: italic; }
+  .code-card pre .k { color: #c084fc; }
+  .code-card pre .f { color: #60a5fa; }
+  .code-card pre .s { color: #fbbf24; }
+  .code-card pre .n { color: #4ade80; }
+  .code-card pre .step {
+    display: inline-block;
+    width: 18px; height: 18px;
+    line-height: 18px;
+    text-align: center;
+    background: var(--primary);
+    color: white;
+    border-radius: 50%;
+    font-size: 10px;
+    font-weight: 700;
+    margin-right: 6px;
+    vertical-align: middle;
+  }
+
+  /* SVG WRAPPER */
+  .fig {
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 20px;
+    margin: 16px 0;
+    text-align: center;
+  }
+  .fig svg { max-width: 100%; height: auto; }
+  .fig .cap {
+    color: var(--muted);
+    font-size: 12px;
+    margin-top: 8px;
+    text-align: center;
+  }
+
+  /* CASE CARDS */
+  .cases {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 16px;
+    margin: 16px 0;
+  }
+  .case {
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 18px 20px;
+    border-left: 3px solid var(--red);
+  }
+  .case h4 {
+    margin: 0 0 6px;
+    font-size: 15px;
+    color: var(--text);
+    font-family: "JetBrains Mono", "SF Mono", Menlo, monospace;
+  }
+  .case .path {
+    color: var(--muted);
+    font-size: 12px;
+    font-family: "JetBrains Mono", "SF Mono", Menlo, monospace;
+    margin-bottom: 10px;
+  }
+  .case .row {
+    display: grid;
+    grid-template-columns: 100px 1fr;
+    gap: 12px;
+    font-size: 13px;
+    margin-bottom: 8px;
+  }
+  .case .row .k {
+    color: var(--muted);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    padding-top: 2px;
+  }
+  .case .row .v { color: var(--text); }
+  .case .why {
+    background: var(--red-soft);
+    border-radius: 8px;
+    padding: 10px 12px;
+    margin-top: 8px;
+    font-size: 13px;
+    color: #fca5a5;
+  }
+
+  /* TIMELINE */
+  .timeline {
+    position: relative;
+    padding-left: 28px;
+    margin: 16px 0;
+  }
+  .timeline::before {
+    content: "";
+    position: absolute;
+    left: 8px; top: 4px; bottom: 4px;
+    width: 2px;
+    background: linear-gradient(180deg, var(--primary), var(--green));
+  }
+  .tl-item {
+    position: relative;
+    margin-bottom: 16px;
+  }
+  .tl-item::before {
+    content: "";
+    position: absolute;
+    left: -24px; top: 6px;
+    width: 12px; height: 12px;
+    border-radius: 50%;
+    background: var(--panel);
+    border: 2px solid var(--primary);
+  }
+  .tl-item.highlight::before {
+    background: var(--green);
+    border-color: var(--green);
+    box-shadow: 0 0 0 4px var(--green-soft);
+  }
+  .tl-item .commit {
+    font-family: "JetBrains Mono", "SF Mono", Menlo, monospace;
+    color: var(--primary);
+    font-size: 12px;
+    font-weight: 600;
+  }
+  .tl-item.highlight .commit { color: var(--green); }
+  .tl-item .desc {
+    color: var(--text);
+    font-size: 14px;
+    margin-top: 2px;
+  }
+  .tl-item .tag-self {
+    display: inline-block;
+    background: var(--green-soft);
+    color: var(--green);
+    font-size: 10px;
+    padding: 1px 6px;
+    border-radius: 4px;
+    margin-left: 6px;
+    vertical-align: middle;
+  }
+
+  /* FIX STEP LIST */
+  .steps {
+    counter-reset: step;
+    margin: 16px 0;
+  }
+  .step-item {
+    counter-increment: step;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px 16px 14px 56px;
+    margin-bottom: 10px;
+    position: relative;
+  }
+  .step-item::before {
+    content: counter(step);
+    position: absolute;
+    left: 16px; top: 50%;
+    transform: translateY(-50%);
+    width: 28px; height: 28px;
+    line-height: 28px;
+    text-align: center;
+    background: var(--green-soft);
+    color: var(--green);
+    border-radius: 50%;
+    font-weight: 700;
+    font-family: "JetBrains Mono", monospace;
+  }
+  .step-item strong { color: var(--green); }
+  .step-item code { color: var(--blue); font-size: 13px; }
+
+  /* VERIFY */
+  .verify-list {
+    margin: 12px 0;
+    padding-left: 0;
+    list-style: none;
+  }
+  .verify-list li {
+    padding: 8px 0 8px 28px;
+    position: relative;
+    font-size: 14px;
+  }
+  .verify-list li::before {
+    content: "▸";
+    position: absolute;
+    left: 6px;
+    color: var(--primary);
+  }
+  .verify-list li code { color: var(--blue); }
+
+  footer {
+    text-align: center;
+    color: var(--muted);
+    font-size: 12px;
+    padding: 24px;
+    border-top: 1px solid var(--border);
+    margin-top: 32px;
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <!-- HERO -->
+  <div class="hero">
+    <div class="badge"><span class="dot"></span> BUG 复盘 · Kotlin/Native GC</div>
+    <h1>主题 1-1：<code style="color:var(--red)">VisitGlobalRoots</code> 被改成 no-op 导致 STW 路径 root 全丢</h1>
+    <div class="sub">
+      分叉太久，上游对"谁负责扫 global root"的语义漂移 → OHOS 分支 STW GC 扫了个寂寞 → 3 个用例从 0 fails 变 3 fails。
+    </div>
+  </div>
+
+  <!-- META -->
+  <div class="meta-grid">
+    <div class="meta-card">
+      <div class="label">修复 Commit</div>
+      <div class="value commit">bd0abd533c9</div>
+    </div>
+    <div class="meta-card">
+      <div class="label">修复分支</div>
+      <div class="value">cpf/develop-2.2.21-OH</div>
+    </div>
+    <div class="meta-card">
+      <div class="label">涉及代码</div>
+      <div class="value">KNRootVisitor.cpp (+11) / .hpp (-7)</div>
+    </div>
+    <div class="meta-card">
+      <div class="label">触发用例</div>
+      <div class="value">GlobalRootsStress / StableRefStress / StableRef bench</div>
+    </div>
+    <div class="meta-card">
+      <div class="label">上游肇事 Commit</div>
+      <div class="value commit" style="color:var(--red)">33af2848b3c</div>
+    </div>
+    <div class="meta-card">
+      <div class="label">失败变化</div>
+      <div class="value" style="color:var(--red)">0 fails → 3 fails</div>
+    </div>
+  </div>
+
+  <!-- 1. 一句话症状 -->
+  <section>
+    <h2><span class="num">1</span>一句话症状</h2>
+    <p class="lead">这是整个 bug 最关键的一句，所有现象都从它展开。</p>
+    <div class="callout">
+      libcrt 的 STW GC 路径（<code>ark_collector.cpp</code> 的 <code>EnumRootsImpl&lt;VisitGlobalRoots&gt;</code>）只调 <code>VisitGlobalRoots</code>，
+      而它被上游改成了 <strong>no-op</strong> → STW 时 <strong>Kotlin globals + stable refs 全部丢失</strong> → 上述 3 个用例从 0 fails 变 3 fails。
+    </div>
+  </section>
+
+  <!-- 2. 路径示意图 -->
+  <section>
+    <h2><span class="num">2</span>GC Root 扫描路径：修复前 vs 修复后</h2>
+    <p class="lead">先看一张图理解 STW 路径和并发路径在修复前后的关系。</p>
+
+    <div class="fig">
+      <svg viewBox="0 0 900 360" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <marker id="arrow-red" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto">
+            <path d="M0,0 L8,4 L0,8 Z" fill="#ff5c5c"/>
+          </marker>
+          <marker id="arrow-green" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto">
+            <path d="M0,0 L8,4 L0,8 Z" fill="#4ade80"/>
+          </marker>
+          <marker id="arrow-gray" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto">
+            <path d="M0,0 L8,4 L0,8 Z" fill="#8b8f9c"/>
+          </marker>
+        </defs>
+
+        <!-- Left: Before -->
+        <text x="200" y="24" text-anchor="middle" fill="#ff5c5c" font-size="14" font-weight="700">修复前（no-op）</text>
+
+        <!-- STW box -->
+        <rect x="40" y="40" width="160" height="60" rx="8" fill="rgba(255,92,92,0.12)" stroke="#ff5c5c" stroke-width="1.5"/>
+        <text x="120" y="68" text-anchor="middle" fill="#e6e8ee" font-size="13" font-weight="600">STW GC 路径</text>
+        <text x="120" y="86" text-anchor="middle" fill="#8b8f9c" font-size="11">EnumRootsImpl&lt;VisitGlobalRoots&gt;</text>
+
+        <!-- VisitGlobalRoots (broken) -->
+        <rect x="40" y="130" width="160" height="60" rx="8" fill="rgba(255,92,92,0.18)" stroke="#ff5c5c" stroke-width="1.5" stroke-dasharray="4 3"/>
+        <text x="120" y="158" text-anchor="middle" fill="#ff5c5c" font-size="13" font-weight="600">VisitGlobalRoots()</text>
+        <text x="120" y="176" text-anchor="middle" fill="#ff5c5c" font-size="11" font-style="italic">// no-op（空函数）</text>
+
+        <!-- Roots (empty) -->
+        <rect x="40" y="220" width="160" height="60" rx="8" fill="rgba(255,92,92,0.08)" stroke="#ff5c5c" stroke-width="1.5"/>
+        <text x="120" y="248" text-anchor="middle" fill="#e6e8ee" font-size="13" font-weight="600">root 集合</text>
+        <text x="120" y="266" text-anchor="middle" fill="#ff5c5c" font-size="11">∅ 空</text>
+
+        <!-- Objects collected -->
+        <rect x="40" y="310" width="160" height="40" rx="8" fill="rgba(255,92,92,0.15)" stroke="#ff5c5c" stroke-width="1.5"/>
+        <text x="120" y="335" text-anchor="middle" fill="#ff5c5c" font-size="12" font-weight="600">globals + StableRef 被回收</text>
+
+        <!-- arrows before -->
+        <line x1="120" y1="100" x2="120" y2="128" stroke="#ff5c5c" stroke-width="1.5" marker-end="url(#arrow-red)"/>
+        <line x1="120" y1="190" x2="120" y2="218" stroke="#ff5c5c" stroke-width="1.5" stroke-dasharray="3 3" marker-end="url(#arrow-red)"/>
+        <text x="135" y="208" fill="#ff5c5c" font-size="10">扫了个寂寞</text>
+        <line x1="120" y1="280" x2="120" y2="308" stroke="#ff5c5c" stroke-width="1.5" marker-end="url(#arrow-red)"/>
+
+        <!-- separator -->
+        <line x1="450" y1="20" x2="450" y2="350" stroke="#2a2e3c" stroke-width="1" stroke-dasharray="4 4"/>
+
+        <!-- Right: After -->
+        <text x="680" y="24" text-anchor="middle" fill="#4ade80" font-size="14" font-weight="700">修复后（publish + 委托）</text>
+
+        <!-- STW box -->
+        <rect x="600" y="40" width="160" height="60" rx="8" fill="rgba(74,222,128,0.12)" stroke="#4ade80" stroke-width="1.5"/>
+        <text x="680" y="68" text-anchor="middle" fill="#e6e8ee" font-size="13" font-weight="600">STW GC 路径</text>
+        <text x="680" y="86" text-anchor="middle" fill="#8b8f9c" font-size="11">EnumRootsImpl&lt;VisitGlobalRoots&gt;</text>
+
+        <!-- VisitGlobalRoots (fixed) -->
+        <rect x="600" y="130" width="160" height="60" rx="8" fill="rgba(74,222,128,0.18)" stroke="#4ade80" stroke-width="1.5"/>
+        <text x="680" y="156" text-anchor="middle" fill="#4ade80" font-size="13" font-weight="600">VisitGlobalRoots()</text>
+        <text x="680" y="174" text-anchor="middle" fill="#8b8f9c" font-size="10">① Publish() + ② 委托</text>
+
+        <!-- Concurrent path -->
+        <rect x="600" y="220" width="160" height="60" rx="8" fill="rgba(127,82,255,0.12)" stroke="#7F52FF" stroke-width="1.5"/>
+        <text x="680" y="248" text-anchor="middle" fill="#e6e8ee" font-size="13" font-weight="600">VisitConcurrentRoots()</text>
+        <text x="680" y="266" text-anchor="middle" fill="#8b8f9c" font-size="11">扫公共 root 集合</text>
+
+        <!-- Roots alive -->
+        <rect x="600" y="310" width="160" height="40" rx="8" fill="rgba(74,222,128,0.15)" stroke="#4ade80" stroke-width="1.5"/>
+        <text x="680" y="335" text-anchor="middle" fill="#4ade80" font-size="12" font-weight="600">globals + StableRef 存活</text>
+
+        <!-- arrows after -->
+        <line x1="680" y1="100" x2="680" y2="128" stroke="#4ade80" stroke-width="1.5" marker-end="url(#arrow-green)"/>
+        <line x1="680" y1="190" x2="680" y2="218" stroke="#4ade80" stroke-width="1.5" marker-end="url(#arrow-green)"/>
+        <text x="695" y="208" fill="#4ade80" font-size="10">委托</text>
+        <line x1="680" y1="280" x2="680" y2="308" stroke="#4ade80" stroke-width="1.5" marker-end="url(#arrow-green)"/>
+      </svg>
+      <div class="cap">图 1 · STW 路径在修复前调一个空函数（root 全丢），修复后委托并发路径扫同一份 root 集合</div>
+    </div>
+  </section>
+
+  <!-- 3. 根因 -->
+  <section>
+    <h2><span class="num">3</span>根因：分叉语义漂移（契约不匹配）</h2>
+    <p class="lead">这不是手抖写错，是两个分叉对"谁负责扫 root"的理解发生了漂移。</p>
+
+    <div class="fig">
+      <svg viewBox="0 0 900 240" xmlns="http://www.w3.org/2000/svg">
+        <!-- Upstream -->
+        <rect x="30" y="20" width="380" height="90" rx="10" fill="rgba(127,82,255,0.08)" stroke="#7F52FF" stroke-width="1.5"/>
+        <text x="220" y="44" text-anchor="middle" fill="#7F52FF" font-size="13" font-weight="700">上游假设（33af2848b3c）</text>
+        <text x="220" y="68" text-anchor="middle" fill="#e6e8ee" font-size="12">所有 root 扫描都走 VisitConcurrentRoots</text>
+        <text x="220" y="86" text-anchor="middle" fill="#8b8f9c" font-size="11">"VisitGlobalRoots 没人再走"</text>
+        <text x="220" y="102" text-anchor="middle" fill="#ff5c5c" font-size="11" font-weight="600">→ 改成 no-op</text>
+
+        <!-- OHOS branch -->
+        <rect x="490" y="20" width="380" height="90" rx="10" fill="rgba(255,92,92,0.08)" stroke="#ff5c5c" stroke-width="1.5"/>
+        <text x="680" y="44" text-anchor="middle" fill="#ff5c5c" font-size="13" font-weight="700">OHOS 分支现实</text>
+        <text x="680" y="68" text-anchor="middle" fill="#e6e8ee" font-size="12">libcrt 仍保留 STW 路径</text>
+        <text x="680" y="86" text-anchor="middle" fill="#8b8f9c" font-size="11">"STW 只调 VisitGlobalRoots"</text>
+        <text x="680" y="102" text-anchor="middle" fill="#ff5c5c" font-size="11" font-weight="600">→ 函数空 = 扫了个寂寞</text>
+
+        <!-- Collision -->
+        <text x="450" y="135" text-anchor="middle" fill="#fbbf24" font-size="20" font-weight="700">≠</text>
+        <text x="450" y="160" text-anchor="middle" fill="#fbbf24" font-size="11" font-weight="600">契约不匹配</text>
+
+        <!-- Result -->
+        <rect x="200" y="175" width="500" height="50" rx="10" fill="rgba(255,92,92,0.15)" stroke="#ff5c5c" stroke-width="1.5"/>
+        <text x="450" y="198" text-anchor="middle" fill="#e6e8ee" font-size="12" font-weight="600">STW GC 标记阶段 root 集合为空</text>
+        <text x="450" y="216" text-anchor="middle" fill="#ff5c5c" font-size="11">全局对象 + StableRef 对象被错误回收</text>
+      </svg>
+      <div class="cap">图 2 · 上游和 OHOS 分叉对同一个函数的"职责"理解不同 → bug 必现</div>
+    </div>
+
+    <div class="callout yellow">
+      <strong>本质：</strong>分叉太久，上游对"哪个函数负责扫 global root"的语义发生漂移，OHOS 分支的 STW 路径未跟上 → STW GC 标记阶段 root 集合为空 → 全局对象 + StableRef 对象被错误回收。
+    </div>
+  </section>
+
+  <!-- 4. 代码对照 -->
+  <section>
+    <h2><span class="num">4</span>代码对照：修复前 vs 修复后</h2>
+    <p class="lead">同一段函数 <code>KNRootVisitor::VisitGlobalRoots</code>，注意 <code style="color:var(--blue)">KNRootVisitor.cpp:352</code>。</p>
+
+    <div class="code-grid">
+      <div class="code-card">
+        <div class="head">
+          <span>修复前 · 上游 33af2848b3c</span>
+          <span class="tag bad">BUG</span>
+        </div>
+<pre><span class="c">// KNRootVisitor.cpp</span>
+<span class="k">void</span> <span class="f">KNRootsVisitor::VisitGlobalRoots</span>(
+    <span class="k">const</span> RefFieldVisitor&amp; visitor)
+{
+    <span class="c">// no-op —— 上游假设</span>
+    <span class="c">// 没人再走这条路</span>
+}
+
+<span class="c">/* STW 路径只调这个函数
+ * → 函数空 → root 集合空
+ * → GC 误回收所有 global-held 对象
+ */</span></pre>
+      </div>
+
+      <div class="code-card">
+        <div class="head">
+          <span>修复后 · bd0abd533c9</span>
+          <span class="tag good">FIX</span>
+        </div>
+<pre><span class="c">// KNRootVisitor.cpp:352</span>
+<span class="k">void</span> <span class="f">KNRootsVisitor::VisitGlobalRoots</span>(
+    <span class="k">const</span> RefFieldVisitor&amp; visitor)
+{
+    <span class="c">// NOTE: move concurrent roots out</span>
+    <span class="c">// of global roots later.</span>
+    <span class="k">for</span> (<span class="k">auto</span>&amp; thread : <span class="f">GlobalData::Instance</span>()
+            .threadRegistry().<span class="f">LockForIter</span>()) {
+        thread.<span class="f">Publish</span>();  <span class="c">// ① 先发布</span>
+    }
+    <span class="f">VisitConcurrentRoots</span>(visitor); <span class="c">// ② 再委托</span>
+}</pre>
+      </div>
+    </div>
+
+    <div class="callout green">
+      <strong>关键变化：</strong><code>VisitGlobalRoots</code> 不再 no-op，而是 <strong>STW 路径 = publish + 并发路径</strong>，让 STW 和并发两条路覆盖同一份 root 集合，契约重新对齐。
+    </div>
+  </section>
+
+  <!-- 5. FAIL 用例 -->
+  <section>
+    <h2><span class="num">5</span>3 个 FAIL 用例：从 0 fails 变 3 fails</h2>
+    <p class="lead">用例仓库：<code>/Users/zhangxinyu/oh/hello/KN-performance-testcases</code></p>
+
+    <div class="cases">
+      <!-- Case 1 -->
+      <div class="case">
+        <h4>① GlobalRootsStress</h4>
+        <div class="path">testsuite/stability/gc-concurrent/GlobalRootsStress/GlobalRootsStress.kt</div>
+        <div class="row"><div class="k">在测什么</div><div class="v">8 worker × 1000 轮，每轮验证 4 个全局 <code>globalStress1..4</code> + <code>StressGlobalHolder.p1/p2/p3</code>，然后 <code>GC.collect()</code></div></div>
+        <div class="row"><div class="k">为什么 FAIL</div><div class="v">GC 看不见 7 个全局 root → 它们被回收 → worker 读到被破坏对象 → <code>verify()</code> 返回 false</div></div>
+        <div class="why">关键：7 个全局对象只能通过 global root 被 GC 找到。GC 没扫到 root → 对象被回收 → <code>verify()</code> 失败。</div>
+      </div>
+
+      <!-- Case 2 -->
+      <div class="case">
+        <h4>② StableRefStress</h4>
+        <div class="path">testsuite/stability/gc-concurrent/StableRefStress/StableRefStress.kt</div>
+        <div class="row"><div class="k">在测什么</div><div class="v">1000 个 <code>StableRef</code>，8 worker 并发 <code>refs[i].get().verify()</code>，另一线程狂调 <code>GC.collect()</code></div></div>
+        <div class="row"><div class="k">为什么 FAIL</div><div class="v">StableRef 在 Kotlin 侧靠 <code>SpecialRefRegistry</code> 注册，注册项也走 global root 发布 → STW 看不见 → 指向对象被搬/回收 → <code>get()</code> 返回悬垂引用</div></div>
+        <div class="why">StableRef 注册项作为 global root 发布，STW 路径丢 root → 指向对象可能被搬动后旧指针失效，或被回收。</div>
+      </div>
+
+      <!-- Case 3 -->
+      <div class="case">
+        <h4>③ StableRef benchmark</h4>
+        <div class="path">testsuite/benchmark/gc/StableRef/stableref.kt</div>
+        <div class="row"><div class="k">在测什么</div><div class="v">21 worker × 50 轮：创建 <code>StableRef</code> → 制造 10000 个垃圾 → <code>GC.collect()</code> → 用 raw C pointer 反查回对象校验字段</div></div>
+        <div class="row"><div class="k">为什么 FAIL</div><div class="v">GC 回收了对象，但 StableRef 没被扫到 → <code>rawPtr.asStableRef&lt;...&gt;().get()</code> 取回的对象字段错乱 / identity 丢失</div></div>
+        <div class="why">通过 raw C pointer 反查 StableRef 是最严苛检查：raw pointer 不参与 GC，对象只靠 StableRef 活着。</div>
+      </div>
+    </div>
+
+    <!-- Case 1 code -->
+    <div class="code-card" style="margin-top:12px">
+      <div class="head"><span>用例 1 · GlobalRootsStress.kt:20-29</span><span class="tag bad">7 个全局 root</span></div>
+<pre><span class="k">val</span> globalStress1 = <span class="f">StressPayload</span>(<span class="n">1</span>, <span class="s">"payload-1"</span>)
+<span class="k">val</span> globalStress2 = <span class="f">StressPayload</span>(<span class="n">2</span>, <span class="s">"payload-2"</span>)
+<span class="k">val</span> globalStress3 = <span class="f">StressPayload</span>(<span class="n">3</span>, <span class="s">"payload-3"</span>)
+<span class="k">val</span> globalStress4 = <span class="f">StressPayload</span>(<span class="n">4</span>, <span class="s">"payload-4"</span>)
+
+<span class="k">object</span> <span class="f">StressGlobalHolder</span> {
+    <span class="k">val</span> p1 = <span class="f">StressPayload</span>(<span class="n">101</span>, <span class="s">"payload-101"</span>)
+    <span class="k">val</span> p2 = <span class="f">StressPayload</span>(<span class="n">102</span>, <span class="s">"payload-102"</span>)
+    <span class="k">var</span> p3 = <span class="f">StressPayload</span>(<span class="n">103</span>, <span class="s">"payload-103"</span>)
+}</pre>
+    </div>
+
+    <!-- Case 2 code -->
+    <div class="code-card" style="margin-top:12px">
+      <div class="head"><span>用例 2 · StableRefStress.kt:30-52</span><span class="tag bad">悬垂引用</span></div>
+<pre><span class="k">val</span> objects = <span class="f">Array</span>(STABLE_COUNT) { i -&gt; <span class="f">StablePayload</span>(i, <span class="s">"stable-$i"</span>) }
+<span class="k">val</span> stableRefs = <span class="f">Array</span>(STABLE_COUNT) { i -&gt; <span class="f">StableRef.create</span>(objects[i]) }
+<span class="c">// ...</span>
+<span class="k">while</span> (run.value == <span class="n">1</span>) {
+    <span class="k">for</span> (i <span class="k">in</span> start <span class="k">until</span> end) {
+        <span class="k">val</span> obj = refs[i].<span class="f">get</span>()    <span class="c">// ← 必须每次拿到有效对象</span>
+        <span class="k">if</span> (!obj.<span class="f">verify</span>()) { ... }
+        <span class="k">if</span> (obj.id != i) { ... }
+    }
+}</pre>
+    </div>
+
+    <!-- Case 3 code -->
+    <div class="code-card" style="margin-top:12px">
+      <div class="head"><span>用例 3 · stableref.kt:32-49</span><span class="tag bad">raw pointer 反查</span></div>
+<pre><span class="f">repeat</span> (<span class="n">50</span>) {
+    <span class="k">val</span> v = <span class="f">TimeZone</span>(<span class="s">"stableref"</span>, <span class="n">3600L</span>)
+    <span class="k">val</span> stableRef: <span class="f">StableRef</span>&lt;<span class="f">TimeZone</span>&gt; = <span class="f">StableRef.create</span>(v)
+    <span class="k">val</span> rawPtr: <span class="f">COpaquePointer</span> = stableRef.<span class="f">asCPointer</span>()
+
+    <span class="k">for</span> (i <span class="k">in</span> <span class="n">0</span>..<span class="n">10000</span>) { <span class="f">TimeZone</span>(<span class="s">"garbage_$i"</span>, i.toLong()) }  <span class="c">// 制造垃圾</span>
+    <span class="f">GC.collect</span>()                                                 <span class="c">// 强制 GC</span>
+
+    <span class="k">val</span> retrieved: <span class="f">TimeZone</span> = rawPtr.<span class="f">asStableRef</span>&lt;<span class="f">TimeZone</span>&gt;().<span class="f">get</span>()  <span class="c">// ← 必须存活</span>
+    <span class="k">if</span> (retrieved != v) { <span class="f">println</span>(<span class="s">"error: ..."</span>) }
+}</pre>
+    </div>
+  </section>
+
+  <!-- 6. 修复思路 -->
+  <section>
+    <h2><span class="num">6</span>修复思路：让 STW 和并发覆盖同一份 root</h2>
+    <p class="lead">核心动作：<code>VisitGlobalRoots</code> 不再 no-op，改成 <strong>publish + 委托并发路径</strong>。</p>
+
+    <div class="steps">
+      <div class="step-item">
+        遍历 <code>threadRegistry</code>，对每个线程调 <code>Publish()</code> —— 把各线程 TLS 里 pending 的 global/special root 发布到公共集合。
+      </div>
+      <div class="step-item">
+        委托 <code>VisitConcurrentRoots(visitor)</code> —— 走并发路径扫公共集合。
+      </div>
+      <div class="step-item">
+        <strong>效果：</strong>STW 路径和并发路径覆盖<em>同一份 root 集合</em>，契约重新对齐。
+      </div>
+    </div>
+
+    <div class="fig">
+      <svg viewBox="0 0 900 200" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <marker id="arr-g" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto">
+            <path d="M0,0 L8,4 L0,8 Z" fill="#4ade80"/>
+          </marker>
+        </defs>
+
+        <!-- Step 1 -->
+        <rect x="30" y="60" width="220" height="80" rx="10" fill="rgba(127,82,255,0.1)" stroke="#7F52FF" stroke-width="1.5"/>
+        <text x="140" y="86" text-anchor="middle" fill="#7F52FF" font-size="13" font-weight="700">① Publish()</text>
+        <text x="140" y="108" text-anchor="middle" fill="#e6e8ee" font-size="11">遍历 threadRegistry</text>
+        <text x="140" y="124" text-anchor="middle" fill="#8b8f9c" font-size="11">TLS pending → 公共集合</text>
+
+        <!-- arrow -->
+        <line x1="255" y1="100" x2="325" y2="100" stroke="#4ade80" stroke-width="1.5" marker-end="url(#arr-g)"/>
+
+        <!-- Step 2 -->
+        <rect x="330" y="60" width="220" height="80" rx="10" fill="rgba(74,222,128,0.1)" stroke="#4ade80" stroke-width="1.5"/>
+        <text x="440" y="86" text-anchor="middle" fill="#4ade80" font-size="13" font-weight="700">② VisitConcurrentRoots()</text>
+        <text x="440" y="108" text-anchor="middle" fill="#e6e8ee" font-size="11">委托并发路径</text>
+        <text x="440" y="124" text-anchor="middle" fill="#8b8f9c" font-size="11">扫公共 root 集合</text>
+
+        <!-- arrow -->
+        <line x1="555" y1="100" x2="625" y2="100" stroke="#4ade80" stroke-width="1.5" marker-end="url(#arr-g)"/>
+
+        <!-- Result -->
+        <rect x="630" y="60" width="240" height="80" rx="10" fill="rgba(74,222,128,0.15)" stroke="#4ade80" stroke-width="1.5"/>
+        <text x="750" y="86" text-anchor="middle" fill="#4ade80" font-size="13" font-weight="700">STW = 并发 root 集合</text>
+        <text x="750" y="108" text-anchor="middle" fill="#e6e8ee" font-size="11">契约重新对齐</text>
+        <text x="750" y="124" text-anchor="middle" fill="#8b8f9c" font-size="11">3 个用例 0 fails</text>
+      </svg>
+      <div class="cap">图 3 · 修复流程：先 publish → 再委托 → STW 与并发覆盖同一份 root</div>
+    </div>
+  </section>
+
+  <!-- 7. 提交链 -->
+  <section>
+    <h2><span class="num">7</span>关联提交链：主题 1 全链（按时间顺序）</h2>
+    <p class="lead">本次修复是链路中的第 3 步，整体节奏：<strong>先发布 → 再扫描 → 防护竞态 → 测试锁定 → 收口统一</strong>。</p>
+
+    <div class="timeline">
+      <div class="tl-item">
+        <div class="commit">7aff8b38349</div>
+        <div class="desc">size 一致性</div>
+      </div>
+      <div class="tl-item">
+        <div class="commit">05b4e469a77</div>
+        <div class="desc">valid 位</div>
+      </div>
+      <div class="tl-item highlight">
+        <div class="commit">bd0abd533c9<span class="tag-self">本文</span></div>
+        <div class="desc">扫描入口统一 Publish（<code style="color:var(--green)">VisitGlobalRoots</code> 不再 no-op）</div>
+      </div>
+      <div class="tl-item">
+        <div class="commit">05693dd8886</div>
+        <div class="desc">线程退出先发布</div>
+      </div>
+      <div class="tl-item">
+        <div class="commit">68ede64ed15 / common-rt db438db</div>
+        <div class="desc">TOCTOU 防护</div>
+      </div>
+      <div class="tl-item">
+        <div class="commit">287c566ad63</div>
+        <div class="desc">端到端回归测试</div>
+      </div>
+      <div class="tl-item">
+        <div class="commit">2d7cd1edebb</div>
+        <div class="desc">发布逻辑收口（把 3、4 的 Publish 调用收敛到 <code>VisitGlobalRoots</code> 单点）</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 8. 验证 -->
+  <section>
+    <h2><span class="num">8</span>验证</h2>
+    <p class="lead">本 commit 无自带测试，回归靠以下用例和测试。</p>
+    <ul class="verify-list">
+      <li><code>GlobalRootsStress</code> / <code>StableRefStress</code> / <code>StableRef</code> benchmark —— 即上表 3 个用例。</li>
+      <li><code>287c566ad63</code> 的 CRT nullable global root race 测试（<code>testData/gc/crt/crt_nullable_global_root_race.kt</code>，编译参数 <code>-Xbinary=gc=cmc -Xallocator=crt</code>）。</li>
+      <li>需 CRT 构建环境（<code>-Xallocator=crt</code> + <code>ENABLE_STACKMAP</code>），<strong style="color:var(--yellow)">暂未本地执行</strong>。</li>
+    </ul>
+  </section>
+
+  <footer>
+    主题 1-1 · VisitGlobalRoots no-op 导致 STW root 全丢 · 知识卡片由原文档自动整理
+  </footer>
+</div>
+</body>
+</html>

@@ -1,0 +1,779 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>StackMap · 为什么 Kotlin/Native 的 GC 需要它</title>
+<style>
+  :root {
+    --bg: #0f1117;
+    --panel: #1a1d27;
+    --panel-2: #20232f;
+    --border: #2a2e3c;
+    --text: #e6e8ee;
+    --muted: #8b8f9c;
+    --primary: #7F52FF;
+    --primary-soft: rgba(127, 82, 255, 0.15);
+    --red: #ff5c5c;
+    --red-soft: rgba(255, 92, 92, 0.12);
+    --green: #4ade80;
+    --green-soft: rgba(74, 222, 128, 0.12);
+    --yellow: #fbbf24;
+    --yellow-soft: rgba(251, 191, 36, 0.12);
+    --blue: #60a5fa;
+    --cyan: #22d3ee;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    line-height: 1.7;
+    -webkit-font-smoothing: antialiased;
+  }
+  code, pre, .mono {
+    font-family: "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
+  }
+  .wrap { max-width: 1100px; margin: 0 auto; padding: 40px 24px 80px; }
+
+  /* HERO */
+  .hero {
+    background: linear-gradient(135deg, rgba(127, 82, 255, 0.15), rgba(34, 211, 238, 0.08));
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 36px 32px;
+    margin-bottom: 32px;
+    position: relative;
+    overflow: hidden;
+  }
+  .hero::before {
+    content: ""; position: absolute; top: -40%; right: -10%;
+    width: 460px; height: 460px;
+    background: radial-gradient(circle, rgba(127, 82, 255, 0.25), transparent 70%);
+    pointer-events: none;
+  }
+  .badge {
+    display: inline-flex; align-items: center; gap: 6px;
+    background: var(--primary-soft);
+    border: 1px solid rgba(127, 82, 255, 0.4);
+    color: var(--primary);
+    padding: 4px 12px; border-radius: 999px;
+    font-size: 12px; font-weight: 600;
+    margin-bottom: 16px; letter-spacing: 0.5px;
+  }
+  .badge .dot { width: 6px; height: 6px; background: var(--primary); border-radius: 50%; }
+  h1 { margin: 0 0 12px; font-size: 30px; line-height: 1.3; position: relative; }
+  .hero .sub { color: var(--muted); font-size: 14px; position: relative; }
+  .hero .sub code { color: var(--cyan); }
+
+  /* SECTION */
+  section {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 28px 28px 24px;
+    margin-bottom: 24px;
+  }
+  section > h2 {
+    margin: 0 0 8px; font-size: 21px;
+    display: flex; align-items: center; gap: 10px;
+  }
+  .num {
+    display: inline-flex;
+    width: 30px; height: 30px;
+    background: var(--primary);
+    color: white;
+    border-radius: 8px;
+    align-items: center; justify-content: center;
+    font-size: 14px; font-weight: 700;
+  }
+  section > .lead {
+    color: var(--muted);
+    margin: 0 0 20px;
+    font-size: 14px;
+  }
+
+  /* CALLOUT */
+  .callout {
+    border-left: 4px solid var(--primary);
+    background: var(--primary-soft);
+    padding: 14px 18px;
+    border-radius: 0 12px 12px 0;
+    margin: 16px 0;
+    font-size: 14px;
+  }
+  .callout.yellow { border-color: var(--yellow); background: var(--yellow-soft); }
+  .callout.yellow strong { color: var(--yellow); }
+  .callout.green { border-color: var(--green); background: var(--green-soft); }
+  .callout.green strong { color: var(--green); }
+  .callout.red { border-color: var(--red); background: var(--red-soft); }
+  .callout.red strong { color: var(--red); }
+  .callout strong { color: var(--primary); }
+
+  /* TABLE */
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 16px 0;
+    font-size: 13.5px;
+    background: var(--panel-2);
+    border-radius: 10px;
+    overflow: hidden;
+  }
+  th, td {
+    padding: 12px 14px;
+    text-align: left;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+  }
+  th {
+    background: rgba(127, 82, 255, 0.08);
+    color: var(--primary);
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    font-weight: 700;
+  }
+  tr:last-child td { border-bottom: none; }
+  td code { color: var(--cyan); font-size: 12.5px; word-break: break-all; }
+
+  /* CODE BLOCK */
+  .code-card {
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    overflow: hidden;
+    margin: 16px 0;
+  }
+  .code-card .head {
+    padding: 10px 16px;
+    border-bottom: 1px solid var(--border);
+    font-size: 12px;
+    color: var(--muted);
+    font-family: "JetBrains Mono", "SF Mono", Menlo, monospace;
+    display: flex; justify-content: space-between; align-items: center;
+  }
+  .code-card .head .tag {
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-weight: 600;
+  }
+  .tag.bad { background: var(--red-soft); color: var(--red); }
+  .tag.good { background: var(--green-soft); color: var(--green); }
+  .tag.info { background: var(--primary-soft); color: var(--primary); }
+  .code-card pre {
+    margin: 0;
+    padding: 16px;
+    overflow-x: auto;
+    font-size: 12.5px;
+    line-height: 1.65;
+  }
+  .c { color: #6b7280; font-style: italic; }
+  .k { color: #c084fc; }
+  .f { color: #60a5fa; }
+  .s { color: #fbbf24; }
+  .n { color: #4ade80; }
+  .t { color: #22d3ee; }
+  .step {
+    display: inline-block;
+    min-width: 18px; height: 18px;
+    line-height: 18px;
+    text-align: center;
+    background: var(--primary);
+    color: white;
+    border-radius: 50%;
+    font-size: 10px;
+    font-weight: 700;
+    margin-right: 6px;
+    vertical-align: middle;
+  }
+
+  /* SVG FIGURE */
+  .fig {
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 20px;
+    margin: 16px 0;
+    text-align: center;
+  }
+  .fig svg { max-width: 100%; height: auto; }
+  .fig .cap {
+    color: var(--muted);
+    font-size: 12px;
+    margin-top: 8px;
+    text-align: center;
+  }
+
+  /* LISTS */
+  ul, ol { padding-left: 22px; margin: 12px 0; }
+  li { margin-bottom: 6px; font-size: 14px; }
+  li code { color: var(--cyan); font-size: 13px; }
+
+  /* STEPS */
+  .steps { counter-reset: step; margin: 16px 0; }
+  .step-item {
+    counter-increment: step;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px 16px 14px 56px;
+    margin-bottom: 10px;
+    position: relative;
+    font-size: 14px;
+  }
+  .step-item::before {
+    content: counter(step);
+    position: absolute;
+    left: 16px; top: 14px;
+    width: 28px; height: 28px;
+    line-height: 28px;
+    text-align: center;
+    background: var(--primary-soft);
+    color: var(--primary);
+    border-radius: 50%;
+    font-weight: 700;
+    font-family: "JetBrains Mono", monospace;
+  }
+  .step-item code { color: var(--cyan); font-size: 13px; }
+
+  /* BUG CARDS */
+  .bugs {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+    margin: 16px 0;
+  }
+  @media (max-width: 800px) {
+    .bugs { grid-template-columns: 1fr; }
+  }
+  .bug {
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px 16px;
+    border-left: 3px solid var(--red);
+  }
+  .bug .commit {
+    font-family: "JetBrains Mono", "SF Mono", Menlo, monospace;
+    color: var(--red);
+    font-size: 12px;
+    font-weight: 600;
+    margin-bottom: 4px;
+  }
+  .bug .title { font-size: 14px; color: var(--text); margin-bottom: 6px; font-weight: 600; }
+  .bug .rel { font-size: 12.5px; color: var(--muted); }
+
+  footer {
+    text-align: center;
+    color: var(--muted);
+    font-size: 12px;
+    padding: 24px;
+    border-top: 1px solid var(--border);
+    margin-top: 32px;
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <!-- HERO -->
+  <div class="hero">
+    <div class="badge"><span class="dot"></span> KN GC 内幕 · 第 2 篇</div>
+    <h1>StackMap 是什么，为什么 Kotlin/Native 的 GC 需要它</h1>
+    <div class="sub">
+      接着 <code>01-kotlin-native编译全链路</code> 把镜头推近一格：编译器把 <code>.kt</code> 翻成 LLVM IR 之后，
+      GC 凭什么知道"栈上哪个槽位装着活对象引用"——答案就是 <strong>StackMap</strong>。
+    </div>
+  </div>
+
+  <!-- 0. GC 扫栈这道题 -->
+  <section>
+    <h2><span class="num">0</span>GC 扫栈这道题</h2>
+    <p class="lead">GC 标记阶段要找"活对象"，起点叫根集合（root set），包括三类：</p>
+
+    <div class="fig">
+      <svg viewBox="0 0 900 200" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <marker id="arr1" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto">
+            <path d="M0,0 L8,4 L0,8 Z" fill="#7F52FF"/>
+          </marker>
+        </defs>
+
+        <rect x="30" y="60" width="240" height="80" rx="10" fill="rgba(127,82,255,0.12)" stroke="#7F52FF" stroke-width="1.5"/>
+        <text x="150" y="92" text-anchor="middle" fill="#e6e8ee" font-size="13" font-weight="600">① 全局变量引用</text>
+        <text x="150" y="113" text-anchor="middle" fill="#8b8f9c" font-size="11">固定地址，直接遍历</text>
+        <text x="150" y="130" text-anchor="middle" fill="#4ade80" font-size="11">✓ 好办</text>
+
+        <rect x="330" y="60" width="240" height="80" rx="10" fill="rgba(127,82,255,0.12)" stroke="#7F52FF" stroke-width="1.5"/>
+        <text x="450" y="92" text-anchor="middle" fill="#e6e8ee" font-size="13" font-weight="600">② TLS 里的引用</text>
+        <text x="450" y="113" text-anchor="middle" fill="#8b8f9c" font-size="11">固定地址，直接遍历</text>
+        <text x="450" y="130" text-anchor="middle" fill="#4ade80" font-size="11">✓ 好办</text>
+
+        <rect x="630" y="60" width="240" height="80" rx="10" fill="rgba(255,92,92,0.18)" stroke="#ff5c5c" stroke-width="2"/>
+        <text x="750" y="92" text-anchor="middle" fill="#ff5c5c" font-size="13" font-weight="700">③ 栈上的引用</text>
+        <text x="750" y="113" text-anchor="middle" fill="#8b8f9c" font-size="11">栈是连续内存，混着各种东西</text>
+        <text x="750" y="130" text-anchor="middle" fill="#fbbf24" font-size="11">★ 这一篇的主角</text>
+
+        <line x1="270" y1="100" x2="325" y2="100" stroke="#7F52FF" stroke-width="1.5" marker-end="url(#arr1)"/>
+        <line x1="570" y1="100" x2="625" y2="100" stroke="#ff5c5c" stroke-width="1.5" marker-end="url(#arr1)"/>
+      </svg>
+      <div class="cap">图 1 · GC 扫根集合的三类起点，栈是其中最难的一类</div>
+    </div>
+
+    <p>栈是一段连续内存，里面混着返回地址、保存的寄存器、本地变量、临时值……GC 怎么知道 <code>sp + 0x28</code> 这个位置现在是 <code>Int</code> 还是某个 <code>ObjHeader*</code>？</p>
+
+    <div class="callout yellow">
+      <strong>两条路：</strong>① 朴素办法——把栈整段当指针扫（conservative GC），缺点是会把不是对象的东西误当对象，永远不敢回收。
+      ② <strong>Kotlin/Native 选了精确栈图（precise stackmap）</strong>——编译期就把"每个 GC 安全点上，哪些栈槽/寄存器装着对象引用"全发出来，GC 照图扫。
+    </div>
+  </section>
+
+  <!-- 1. 两种找栈根的办法 -->
+  <section>
+    <h2><span class="num">1</span>两种找栈根的办法</h2>
+    <p class="lead">由编译开关 <code>ENABLE_STACKMAP</code> 决定走哪条路。</p>
+
+    <table>
+      <thead>
+        <tr>
+          <th>模式</th>
+          <th>名字</th>
+          <th>怎么做</th>
+          <th>开关</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><span style="color:var(--red); font-weight:700">OFF</span></td>
+          <td>影子栈<br/>shadow stack</td>
+          <td>编译器在每次可能触发 GC 的调用前后，把活引用手动 push/pop 到一个旁路栈</td>
+          <td><code>ENABLE_STACKMAP</code> 未定义</td>
+        </tr>
+        <tr>
+          <td><span style="color:var(--green); font-weight:700">ON</span></td>
+          <td>精确栈图<br/>precise stackmap</td>
+          <td>编译器发 LLVM stackmap 元数据；GC 走真实 fp 链，按 PC 查表</td>
+          <td><code>ENABLE_STACKMAP=1</code></td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="callout">
+      <strong>权衡：</strong>影子栈慢（每次调用多两条指令）但简单；精确栈图零运行期开销，但编译期和 runtime 都要会读一份"地图"。
+    </div>
+
+    <p>OHOS 分支 <code>ohos_arm64</code> 和 <code>macos_arm64</code> 默认走 ON（<code>runtime/build.gradle.kts:73</code>）：</p>
+
+    <div class="code-card">
+      <div class="head"><span>runtime/build.gradle.kts:73</span><span class="tag info">默认 ON</span></div>
+<pre><span class="k">if</span> (<span class="f">resolveEnableStackmap</span>(project, target)) {
+    compilerArgs.<span class="f">add</span>(<span class="s">"-DENABLE_STACKMAP=1"</span>)
+    compilerArgs.<span class="f">add</span>(<span class="s">"-DENABLE_COMPRESSED_BITMAP_STACKMAP="</span> +
+        <span class="k">if</span> (<span class="f">resolveEnableCompressedStackmap</span>(project, target)) <span class="s">"1"</span> <span class="k">else</span> <span class="s">"0"</span>)
+}</pre>
+    </div>
+  </section>
+
+  <!-- 2. stackmap 长什么样 -->
+  <section>
+    <h2><span class="num">2</span>一份 stackmap 长什么样</h2>
+    <p class="lead">LLVM 把所有 GC 安全点的元数据塞进一个特殊段，符号叫 <code>_LLVM_StackMaps</code>（macOS）或 <code>__LLVM_StackMaps</code>（Linux/OHOS）。</p>
+
+    <div class="fig">
+      <svg viewBox="0 0 900 230" xmlns="http://www.w3.org/2000/svg">
+        <rect x="30" y="20" width="840" height="40" rx="6" fill="rgba(127,82,255,0.15)" stroke="#7F52FF" stroke-width="1.5"/>
+        <text x="450" y="44" text-anchor="middle" fill="#e6e8ee" font-size="13" font-weight="600">StackMapHeader (version / reserved)</text>
+
+        <rect x="30" y="70" width="840" height="40" rx="6" fill="rgba(96,165,250,0.12)" stroke="#60a5fa" stroke-width="1.5"/>
+        <text x="450" y="94" text-anchor="middle" fill="#60a5fa" font-size="13" font-weight="600">StkMapSizeRecord × N（每个函数一条）</text>
+
+        <rect x="30" y="120" width="840" height="40" rx="6" fill="rgba(251,191,36,0.12)" stroke="#fbbf24" stroke-width="1.5"/>
+        <text x="450" y="144" text-anchor="middle" fill="#fbbf24" font-size="13" font-weight="600">Constant × M（常量池）</text>
+
+        <rect x="30" y="170" width="840" height="40" rx="6" fill="rgba(74,222,128,0.12)" stroke="#4ade80" stroke-width="1.5"/>
+        <text x="450" y="194" text-anchor="middle" fill="#4ade80" font-size="13" font-weight="600">StkMapRecord × K（每个 GC 安全点一条）</text>
+      </svg>
+      <div class="cap">图 2 · <code>.llvm_stackmaps</code> 段布局：一串定长记录</div>
+    </div>
+
+    <p>每条 <code>StkMapRecord</code>（即一个安全点）里，核心是 <code>numLocations</code> 个 <code>Location</code>：</p>
+
+    <div class="code-card">
+      <div class="head"><span>runtime/src/gc/common/cpp/StackMap.hpp</span><span class="tag info">Location 结构</span></div>
+<pre><span class="k">struct</span> <span class="t">Location</span> {
+    <span class="k">enum class</span> <span class="t">Kind</span>: uint8_t {
+        REGISTER = <span class="n">1</span>, DIRECT = <span class="n">2</span>, INDIRECT = <span class="n">3</span>,
+        CONSTANT = <span class="n">4</span>, CONSTANTINDEX = <span class="n">5</span>,
+    };
+    Kind location;
+    uint16_t locationSize;
+    uint16_t dwarfRegNum;       <span class="c">// DWARF 寄存器号(如 fp=29, sp=31)</span>
+    int32_t  offsetOrSmallConstant;
+};</pre>
+    </div>
+
+    <div class="callout green">
+      <strong>读法举例：</strong><code>INDIRECT + dwarfRegNum=29 + offset=0x28</code> 的意思就是：
+      "此刻 <code>fp + 0x28</code> 这个栈槽装着一个对象引用"。GC 扫栈时把每条 <code>INDIRECT</code> Location 的 <code>offset</code> 加到对应帧的 <code>fp</code> 上，读出来的就是根指针。
+    </div>
+  </section>
+
+  <!-- 3. 帧怎么找到自己的 stackmap -->
+  <section>
+    <h2><span class="num">3</span>帧怎么找到"自己的"那份 stackmap</h2>
+    <p class="lead">一个 <code>.kexe</code> 里几千个函数、几万个安全点，GC 拿着一个帧的 PC 怎么定位到对应的 Location？</p>
+
+    <div class="callout red">
+      <strong>黑历史：</strong>压缩位图模式（ON）曾踩过坑。debug 构建会把多个模块的 <code>.llvm_stackmaps</code> 拼到一起，
+      每个模块的索引是模块局部的，<strong>模块 M 的帧去查模块 0 的 offsets 表 → 错位</strong>。
+    </div>
+
+    <p>修法很巧——<strong>让每个帧自带"我属于哪个 stackmap blob"的指针</strong>。函数 prologue（ARM64 上对 ADRP 指令的一次 hijack）在进函数时执行：</p>
+
+    <div class="code-card">
+      <div class="head"><span>函数 prologue · ADRP hijack</span><span class="tag good">O(1) 查找</span></div>
+<pre>ADRP x?, .Lstackmap_start.&lt;func&gt;   <span class="c">// PC-relative, link 期解析</span>
+ADD  x?, x?, #lo12:.Lstackmap_start.&lt;func&gt;
+STR  x?, [fp, #-16]                <span class="c">// 存进 *(fp - 2)</span>
+STR  funcStartPC, [fp, #-8]        <span class="c">// 存进 *(fp - 1)</span></pre>
+    </div>
+
+    <p>GC 拿到 fp 就能直接 <code>*(fp - 2)</code> 取到该帧的 stackmap blob 地址，高 16 位是 tag（掩码去掉），低 48 位是真实地址。</p>
+
+    <div class="code-card">
+      <div class="head"><span>ConcurrentMark.cpp:161 · GetStackMapAddress</span><span class="tag info">查找入口</span></div>
+<pre><span class="k">static</span> uint64_t *<span class="f">GetStackMapAddress</span>(uint64_t *fp, uint32_t *funcStartPC, mm::ThreadData&amp; thread) {
+    <span class="c">// The function prologue (AArch64AsmPrinter ADRP hijack) now stores the</span>
+    <span class="c">// absolute address of .Lstackmap_start.&lt;func&gt; directly into *(fp - 2) ...</span>
+    <span class="c">// (the per-module/per-blob index + offsets-table indirection used</span>
+    <span class="c">// previously was broken under multi-blob debug builds: indices were</span>
+    <span class="c">// per-module-local, so module M&gt;0 frames indexed module 0's offsets).</span>
+    uint64_t addr = *(fp - <span class="n">2</span>);
+    <span class="k">constexpr</span> uint64_t payloadMask = (<span class="n">1ULL</span> &lt;&lt; <span class="n">48</span>) - <span class="n">1</span>;
+    <span class="k">return</span> <span class="k">reinterpret_cast</span>&lt;uint64_t*&gt;(addr &amp; payloadMask);
+}</pre>
+    </div>
+
+    <div class="callout green">
+      <strong>这个设计点很值钱：</strong>stackmap 的查找是 <strong>O(1) per frame</strong>，不依赖任何全局表，天然支持多模块 link。
+      压缩位图模式敢用 lazy per-function 查找，前提就是这帧能直接找到自己的 blob。
+    </div>
+  </section>
+
+  <!-- 4. GC 扫一次栈的完整流程 -->
+  <section>
+    <h2><span class="num">4</span>GC 扫一次栈的完整流程</h2>
+    <p class="lead">入口：<code>runtime/src/gc/cms/cpp/ConcurrentMark.cpp:230</code> 的 <code>tryCollectRootSet</code>。</p>
+
+    <div class="fig">
+      <svg viewBox="0 0 900 360" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <marker id="arr2" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto">
+            <path d="M0,0 L8,4 L0,8 Z" fill="#7F52FF"/>
+          </marker>
+        </defs>
+
+        <rect x="40" y="20" width="820" height="50" rx="8" fill="rgba(127,82,255,0.12)" stroke="#7F52FF" stroke-width="1.5"/>
+        <text x="60" y="44" fill="#7F52FF" font-size="13" font-weight="700">①</text>
+        <text x="90" y="44" fill="#e6e8ee" font-size="12">tryLockRootSet() — 抢这个线程的 root set 锁</text>
+
+        <line x1="450" y1="70" x2="450" y2="95" stroke="#7F52FF" stroke-width="1.5" marker-end="url(#arr2)"/>
+
+        <rect x="40" y="95" width="820" height="50" rx="8" fill="rgba(127,82,255,0.12)" stroke="#7F52FF" stroke-width="1.5"/>
+        <text x="60" y="119" fill="#7F52FF" font-size="13" font-weight="700">②</text>
+        <text x="90" y="119" fill="#e6e8ee" font-size="12">gcData.publish() — 先发布 TLS pending roots</text>
+
+        <line x1="450" y1="145" x2="450" y2="170" stroke="#7F52FF" stroke-width="1.5" marker-end="url(#arr2)"/>
+
+        <rect x="40" y="170" width="820" height="50" rx="8" fill="rgba(127,82,255,0.12)" stroke="#7F52FF" stroke-width="1.5"/>
+        <text x="60" y="194" fill="#7F52FF" font-size="13" font-weight="700">③</text>
+        <text x="90" y="194" fill="#e6e8ee" font-size="12">collectRootSetForThread — 走 baseline（TLS / 全局 / shadow-stack）</text>
+
+        <line x1="450" y1="220" x2="450" y2="245" stroke="#7F52FF" stroke-width="1.5" marker-end="url(#arr2)"/>
+
+        <rect x="40" y="245" width="820" height="50" rx="8" fill="rgba(96,165,250,0.12)" stroke="#60a5fa" stroke-width="1.5"/>
+        <text x="60" y="269" fill="#60a5fa" font-size="13" font-weight="700">④</text>
+        <text x="90" y="269" fill="#e6e8ee" font-size="12">GetStackFrame(thread) — fp 链 unwind，拿到所有帧的 fa/ip</text>
+
+        <line x1="450" y1="295" x2="450" y2="305" stroke="#7F52FF" stroke-width="1.5" marker-end="url(#arr2)"/>
+
+        <rect x="40" y="305" width="820" height="50" rx="8" fill="rgba(74,222,128,0.12)" stroke="#4ade80" stroke-width="1.5"/>
+        <text x="60" y="329" fill="#4ade80" font-size="13" font-weight="700">⑤⑥⑦⑧⑨</text>
+        <text x="135" y="329" fill="#e6e8ee" font-size="12">每帧查 stackmap → fp+offset 取根 → 跳过 null/无效 → 入队</text>
+      </svg>
+      <div class="cap">图 3 · tryCollectRootSet 完整流程：从抢锁到入队根对象</div>
+    </div>
+
+    <div class="code-card">
+      <div class="head"><span>ConcurrentMark.cpp:230 · tryCollectRootSet</span><span class="tag info">CMC GC 标记阶段入口</span></div>
+<pre><span class="k">void</span> gc::mark::ConcurrentMark::<span class="f">tryCollectRootSet</span>(mm::ThreadData&amp; thread, MarkTraits::MarkQueue&amp; markQueue) {
+    <span class="k">auto</span>&amp; gcData = thread.gc().impl().mark_;
+    <span class="k">if</span> (!gcData.<span class="f">tryLockRootSet</span>()) <span class="k">return</span>;          <span class="c">// ① 抢这个线程的 root set 锁</span>
+    gcData.<span class="f">publish</span>();                               <span class="c">// ② 先发布 TLS pending roots</span>
+    <span class="f">collectRootSetForThread</span>&lt;MarkTraits&gt;(...);       <span class="c">// ③ 走 baseline(TLS / 全局 / shadow-stack)</span>
+<span class="k">#ifdef</span> ENABLE_STACKMAP
+    std::vector&lt;FrameInfo&gt; frameInfos = <span class="f">GetStackFrame</span>(thread);   <span class="c">// ④ fp 链 unwind</span>
+    <span class="k">if</span> (frameInfos.<span class="f">empty</span>()) <span class="k">return</span>;
+    <span class="k">for</span> (<span class="k">size_t</span> i = <span class="n">0</span>; i &lt; frameInfos.<span class="f">size</span>(); i++) {
+        <span class="k">if</span> (frameInfos[i].fa == <span class="n">0</span> || frameInfos[i].ip == <span class="n">0</span>) <span class="k">continue</span>;
+        uint64_t* fp = <span class="k">reinterpret_cast</span>&lt;uint64_t*&gt;(frameInfos[i].fa);
+        <span class="k">const</span> uint32_t* pc = <span class="k">reinterpret_cast</span>&lt;<span class="k">const</span> uint32_t*&gt;(frameInfos[i].ip);
+        std::vector&lt;int32_t&gt; baseRoots;
+        <span class="f">CollectStackMapBaseRoot</span>(thread, fp, pc, baseRoots);      <span class="c">// ⑤ 查这帧的 stackmap</span>
+        <span class="k">for</span> (<span class="k">auto</span>&amp; baseRootOffset : baseRoots) {
+            uintptr_t address = (uintptr_t)fp + baseRootOffset; <span class="c">// ⑥ fp + offset = 根槽地址</span>
+            ObjHeader* object = (ObjHeader*)*((uint64_t*)address);
+            <span class="k">if</span> (!object) <span class="k">continue</span>;                              <span class="c">// ⑦ 跳过 null</span>
+            KNStateWord *word = <span class="k">reinterpret_cast</span>&lt;KNStateWord*&gt;(object);
+            <span class="k">if</span> (!(word-&gt;<span class="f">IsValid</span>())) <span class="k">continue</span>;                   <span class="c">// ⑧ 跳过半构造对象</span>
+            internal::<span class="f">collectRoot</span>&lt;MarkTraits&gt;(markQueue, object); <span class="c">// ⑨ 入队</span>
+        }
+    }
+<span class="k">#endif</span>
+}</pre>
+    </div>
+
+    <p>⑤ <code>CollectStackMapBaseRoot</code>（<code>ConcurrentMark.cpp:180</code>）在压缩位图模式下用 <code>StackMapBuilder::collectHeapReferenceMap</code> 把这帧所有"装堆引用的栈槽相对 fp 的偏移"提取出来：</p>
+
+    <div class="code-card">
+      <div class="head"><span>ConcurrentMark.cpp:180 · CollectStackMapBaseRoot</span><span class="tag info">查这帧的 stackmap</span></div>
+<pre>uint32_t *funcStartPC = <span class="k">reinterpret_cast</span>&lt;uint32_t*&gt;(*(fp - <span class="n">1</span>));
+uint64_t *stackMapAddress = <span class="f">GetStackMapAddress</span>(fp, funcStartPC, thread);
+stackmap::StackMapBuilder stackMapBuilder(
+    <span class="k">reinterpret_cast</span>&lt;uintptr_t&gt;(funcStartPC),
+    <span class="k">reinterpret_cast</span>&lt;uintptr_t&gt;(pc),
+    stackMapAddress);
+stackMapBuilder.<span class="f">collectHeapReferenceMap</span>(base2DerivedOffsets);</pre>
+    </div>
+
+    <p>④ <code>GetStackFrame</code> 在 <code>runtime/src/mm/cpp/FpUnwind.cpp</code> 里，沿着 fp 链一帧一帧往上走，识别帧类型（<code>KOTLIN_FRAME</code> / <code>K2N_STUB</code> / <code>RUNTIME_FRAME</code> 等，见 <code>FpUnwind.h:69</code> 的 <code>FrameType</code> 枚举），<strong>只对 <code>KOTLIN_FRAME</code> 帧做 stackmap 查找</strong>——因为只有 Kotlin 编译器发的代码才有 stackmap，runtime/stub 的帧不归 GC 管。</p>
+  </section>
+
+  <!-- 5. valid 位 -->
+  <section>
+    <h2><span class="num">5</span>valid 位：分配器和 GC 之间的握手协议</h2>
+    <p class="lead">⑦ 跳过 null 好懂。⑧ <code>KNStateWord::IsValid()</code> 才是关键。</p>
+
+    <div class="code-card">
+      <div class="head"><span>runtime/src/main/cpp/TypeInfo.h:100</span><span class="tag info">握手位</span></div>
+<pre><span class="c">// Precise-stackmap object valid-state word. Bit 59 of typeInfoOrMeta_ is</span>
+<span class="c">// set on object construction (CustomAllocator::CreateObject/CreateArray)</span>
+<span class="c">// and read by GC sweep (ConcurrentMark) to skip half-constructed objects.</span>
+<span class="k">constexpr unsigned</span> kValidBitNoHwasan = <span class="n">59</span>;
+<span class="k">constexpr unsigned</span> kValidBitHwasan   = <span class="n">2</span>;
+
+<span class="k">class</span> <span class="t">KNStateWord</span> {
+<span class="k">public</span>:
+    ALWAYS_INLINE <span class="k">static</span> uint64_t <span class="f">ValidBit</span>() <span class="k">noexcept</span> {
+        <span class="k">return</span> uint64_t{<span class="n">1</span>} &lt;&lt; (kotlin::compiler::<span class="f">isHwasanEnabled</span>() ? kValidBitHwasan : kValidBitNoHwasan);
+    }
+    <span class="k">void</span> <span class="f">SetValid</span>()      { state_ |= <span class="f">ValidBit</span>(); }
+    <span class="k">bool</span> <span class="f">IsValid</span>()       { <span class="k">return</span> (state_ &amp; <span class="f">ValidBit</span>()) != <span class="n">0</span>; }
+<span class="k">private</span>:
+    uint64_t state_;
+};</pre>
+    </div>
+
+    <p><code>KNStateWord</code> 是 <code>ObjHeader::typeInfoOrMeta_</code> 字段的别名视图（同一块 64 位内存换个类型读）。<strong>bit 59 是"这个对象头已经写完，GC 可以扫"的标志位</strong>。</p>
+
+    <div class="callout yellow">
+      <strong>为什么需要？</strong>分配一个对象不是原子的。如果栈上某个槽已指向这块新内存（<code>val x = Foo()</code> 编译成"先分配、再存到 x 的栈槽"），但 <code>typeInfoOrMeta_</code> 还没写完或刚写完 valid 位还没置，GC 这时扫过来读 <code>typeInfoOrMeta_</code> 就是垃圾值 → 解引用 TypeInfo → <strong>崩</strong>。
+      <br/><br/>
+      <strong>valid 位</strong>就是分配器和 GC 之间的"我这边写完了，你可以读"信号。
+    </div>
+
+    <p>分配器侧两个入口都必须置位：</p>
+    <ul>
+      <li><code>CustomAllocator::CreateObject</code> / <code>CreateArray</code>（custom 分配器，<code>CustomAllocator.cpp:62/87</code>）</li>
+      <li><code>ObjectFactory::CreateObject</code> / <code>CreateArray</code>（std/legacy 分配器，<code>ObjectFactory.hpp:548</code>）</li>
+    </ul>
+
+    <div class="callout red">
+      <strong>典型 bug：</strong>后者（std/legacy 分配器）是 OHOS 分支 <code>05b4e469a77</code>（主题 1-3）补上的——原代码只在 custom 分配器置位，
+      结果<strong>用 std/legacy 分配器构造的对象 valid 位恒为 0，栈根引用它们时被 GC 当半构造对象跳过 → 漏扫 → UAF</strong>。
+      这是个非常典型的"两个分配器镜像同一段逻辑，漏掉一个就出 bug"的故事。
+    </div>
+
+    <div class="code-card">
+      <div class="head"><span>runtime/src/alloc/custom/cpp/CustomAllocator.cpp:37</span><span class="tag info">置位流程</span></div>
+<pre>object-&gt;typeInfoOrMeta_ = <span class="f">clearPointerBits</span>(typeInfo, OBJECT_TAG_MASK);  <span class="c">// 写 typeInfo</span>
+<span class="c">// ... 中间可能被 GC 中断 ...</span>
+<span class="k">#ifdef</span> ENABLE_STACKMAP
+    KNStateWord *word = <span class="k">reinterpret_cast</span>&lt;KNStateWord*&gt;(object);
+    word-&gt;<span class="f">SetValid</span>();                                                    <span class="c">// 置 valid 位</span>
+<span class="k">#endif</span></pre>
+    </div>
+  </section>
+
+  <!-- 6. bit 59 / bit 2 -->
+  <section>
+    <h2><span class="num">6</span>为什么是 bit 59，HWASan 下又挪到 bit 2</h2>
+    <p class="lead"><code>TypeInfo.h:92</code> 那段注释值得单独讲。</p>
+
+    <div class="fig">
+      <svg viewBox="0 0 900 160" xmlns="http://www.w3.org/2000/svg">
+        <!-- 非 HWASan -->
+        <text x="180" y="22" text-anchor="middle" fill="#4ade80" font-size="13" font-weight="700">非 HWASan</text>
+        <rect x="30" y="40" width="300" height="40" rx="4" fill="rgba(74,222,128,0.1)" stroke="#4ade80" stroke-width="1.5"/>
+        <text x="180" y="62" text-anchor="middle" fill="#8b8f9c" font-size="11">bits 0-47: 对象地址（48 位）</text>
+        <rect x="330" y="40" width="100" height="40" rx="4" fill="rgba(251,191,36,0.2)" stroke="#fbbf24" stroke-width="1.5"/>
+        <text x="380" y="62" text-anchor="middle" fill="#fbbf24" font-size="11" font-weight="700">48-58: tag</text>
+        <rect x="430" y="40" width="40" height="40" rx="4" fill="rgba(255,92,92,0.3)" stroke="#ff5c5c" stroke-width="2"/>
+        <text x="450" y="62" text-anchor="middle" fill="#ff5c5c" font-size="11" font-weight="700">59</text>
+        <rect x="470" y="40" width="100" height="40" rx="4" fill="rgba(251,191,36,0.2)" stroke="#fbbf24" stroke-width="1.5"/>
+        <text x="520" y="62" text-anchor="middle" fill="#fbbf24" font-size="11">60-63: tag</text>
+        <text x="300" y="105" text-anchor="middle" fill="#4ade80" font-size="11">bit 59 在 tag 区，安全</text>
+        <text x="300" y="125" text-anchor="middle" fill="#8b8f9c" font-size="10">正常对象指针不会用到</text>
+
+        <!-- HWASan -->
+        <text x="720" y="22" text-anchor="middle" fill="#60a5fa" font-size="13" font-weight="700">HWASan 开启</text>
+        <rect x="600" y="40" width="40" height="40" rx="4" fill="rgba(255,92,92,0.3)" stroke="#ff5c5c" stroke-width="2"/>
+        <text x="620" y="62" text-anchor="middle" fill="#ff5c5c" font-size="11" font-weight="700">2</text>
+        <rect x="640" y="40" width="240" height="40" rx="4" fill="rgba(74,222,128,0.1)" stroke="#4ade80" stroke-width="1.5"/>
+        <text x="760" y="62" text-anchor="middle" fill="#8b8f9c" font-size="11">bits 3-55: 对象地址</text>
+        <rect x="880" y="40" width="80" height="40" rx="4" fill="rgba(96,165,250,0.2)" stroke="#60a5fa" stroke-width="1.5"/>
+        <text x="920" y="62" text-anchor="middle" fill="#60a5fa" font-size="11">56-63</text>
+        <text x="720" y="105" text-anchor="middle" fill="#60a5fa" font-size="11">bits 56-63 被用作 pointer tag</text>
+        <text x="720" y="125" text-anchor="middle" fill="#8b8f9c" font-size="10">bit 59 被吃了 → 挪到 bit 2</text>
+      </svg>
+      <div class="cap">图 4 · bit 59 vs bit 2：HWASan 用了高 8 位做 pointer tag，valid 位只能挪到对象头对齐空隙</div>
+    </div>
+
+    <ul>
+      <li><strong>非 HWASan：</strong>bit 59。<code>typeInfoOrMeta_</code> 高 16 位（bits 48-63）是 tag 位，正常对象指针（48 位地址）不会用到，放个标志位安全。</li>
+      <li><strong>HWASan：</strong>hardware-assisted sanitizer 用 bits 56-63 做 pointer tag，bit 59 被吃了 → 挪到 bit 2（对象头对齐空隙，因为 <code>ObjHeader</code> 起始 8 字节对齐，低 3 位本来是 0）。</li>
+      <li><code>kotlin::compiler::isHwasanEnabled()</code> 是 <strong>app 侧在链接期发出的常量全局变量</strong>，linker 能把 <code>ValidBit()</code> 里的三目运算折叠成一条常量。<strong>零运行期开销</strong>。</li>
+    </ul>
+
+    <div class="callout yellow">
+      <strong>"not a bitfield: bitfield offsets are fixed at compile time"</strong>——这是在解释为什么用 <code>1 &lt;&lt; n</code> 而不是 C bitfield：
+      bitfield 偏移是编译期固定的，做不到这种"运行期读全局常量选位"的折叠。一个很容易被忽略的工程细节。
+    </div>
+  </section>
+
+  <!-- 7. ON/OFF 不是开关那么简单 -->
+  <section>
+    <h2><span class="num">7</span>ON/OFF 不是开关那么简单：同一份 runtime 服务两种 app</h2>
+    <p class="lead">这是这套机制里最绕的一点，<code>FpUnwind.h:19</code> 的注释专门写了。</p>
+
+    <div class="fig">
+      <svg viewBox="0 0 900 240" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <marker id="arr3" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto">
+            <path d="M0,0 L8,4 L0,8 Z" fill="#7F52FF"/>
+          </marker>
+        </defs>
+
+        <!-- ON app -->
+        <rect x="30" y="20" width="380" height="200" rx="10" fill="rgba(74,222,128,0.08)" stroke="#4ade80" stroke-width="1.5"/>
+        <text x="220" y="44" text-anchor="middle" fill="#4ade80" font-size="13" font-weight="700">ON app</text>
+        <text x="220" y="68" text-anchor="middle" fill="#e6e8ee" font-size="11">KonanConfig.enableStackmap=true</text>
+        <text x="220" y="90" text-anchor="middle" fill="#8b8f9c" font-size="11">编译器发 stackmap + 链 asm stub .o</text>
+        <text x="220" y="120" text-anchor="middle" fill="#4ade80" font-size="11">✓ 走 tryCollectRootSet 的 #ifdef 块</text>
+        <text x="220" y="140" text-anchor="middle" fill="#8b8f9c" font-size="11">weak 引用解析到真实地址</text>
+
+        <!-- OFF app -->
+        <rect x="490" y="20" width="380" height="200" rx="10" fill="rgba(255,92,92,0.08)" stroke="#ff5c5c" stroke-width="1.5"/>
+        <text x="680" y="44" text-anchor="middle" fill="#ff5c5c" font-size="13" font-weight="700">OFF app</text>
+        <text x="680" y="68" text-anchor="middle" fill="#e6e8ee" font-size="11">KonanConfig.enableStackmap=false</text>
+        <text x="680" y="90" text-anchor="middle" fill="#8b8f9c" font-size="11">不发 stackmap + linker 丢掉 stub .o</text>
+        <text x="680" y="120" text-anchor="middle" fill="#ff5c5c" font-size="11">走 baseline shadow-stack 路径</text>
+        <text x="680" y="140" text-anchor="middle" fill="#8b8f9c" font-size="11">weak 引用解析为 0 → Is*Stub() 永不匹配</text>
+
+        <!-- runtime bc -->
+        <rect x="200" y="180" width="500" height="40" rx="6" fill="rgba(127,82,255,0.12)" stroke="#7F52FF" stroke-width="1.5"/>
+        <text x="450" y="204" text-anchor="middle" fill="#7F52FF" font-size="12" font-weight="600">同一份 ON 编译的 runtime .bc</text>
+      </svg>
+      <div class="cap">图 5 · 同一份 runtime .bc 服务两种 app：靠 weak 引用 + 不可达路径</div>
+    </div>
+
+    <p><code>ENABLE_STACKMAP</code> 是 <strong>runtime 的编译期开关</strong>（决定 runtime 的 <code>.bc</code> 怎么编），但同一份 runtime <code>.bc</code> 会被链进两种 app：</p>
+    <ul>
+      <li><strong>ON app：</strong><code>KonanConfig.enableStackmap=true</code>，编译器发 stackmap + 链 asm stub <code>.o</code></li>
+      <li><strong>OFF app：</strong><code>KonanConfig.enableStackmap=false</code>，不发 stackmap + <strong>linker 丢掉 asm stub <code>.o</code></strong></li>
+    </ul>
+
+    <p>runtime <code>.bc</code> 是 ON 编译的，所以 <code>FpUnwind.cpp</code> 的实现体<strong>故意不 <code>#ifdef</code> 掉</strong>——它在 OFF runtime 里也得能编译。但 <code>FpUnwind.cpp</code> 里读的那些 stub PC 锚点被声明为 <strong>weak</strong>：</p>
+
+    <div class="code-card">
+      <div class="head"><span>FpUnwind.h:60-64 · weak 引用</span><span class="tag info">关键设计</span></div>
+<pre><span class="k">extern</span> uintptr_t unwindPCForN2KStub __attribute__((<span class="t">weak</span>));
+<span class="k">extern</span> uintptr_t unwindPCForKonanStartStub __attribute__((<span class="t">weak</span>));
+<span class="c">// ...</span></pre>
+    </div>
+
+    <p>这样 OFF app link 时把 stub <code>.o</code> 丢了，这些 weak 引用解析为 0 → <code>Is*Stub()</code> 永不匹配 → 精确栈走逻辑不可达，行为等同于"ON 链了但永不被执行的 stub 代码"。<strong>好处是不用维护两套 runtime 变体</strong>。</p>
+
+    <div class="callout green">
+      <strong>本质：</strong>这是典型的"用一个不可达路径换一份二进制"的取舍。
+      要理解为什么 ON 的 runtime 能安全链进 OFF app，得先理解：OFF app 不发 stackmap，所以 GC 根本不会走 <code>tryCollectRootSet</code> 里那个 <code>#ifdef ENABLE_STACKMAP</code> 块——它走的是 baseline shadow-stack 路径，weak 引用 0 不 0 都无所谓。
+    </div>
+  </section>
+
+  <!-- 8. bug 关联 -->
+  <section>
+    <h2><span class="num">8</span>跟 OHOS 分支修过的 bug 同源</h2>
+    <p class="lead">这套机制不是空中楼阁——<code>z-develop/problem-map.md</code> 里好几条已经修过的 bug 直接长在这条链上。</p>
+
+    <div class="bugs">
+      <div class="bug">
+        <div class="commit">05b4e469a77 · 主题 1-3</div>
+        <div class="title">std/legacy 分配器漏了 SetValid()</div>
+        <div class="rel">精确栈图 GC 把"只通过栈根可达的对象"当半构造跳过 → <strong style="color:var(--red)">UAF</strong></div>
+      </div>
+      <div class="bug">
+        <div class="commit">68ede64ed15 · 主题 1-6</div>
+        <div class="title">并发扫根时 root slot 被读两次（TOCTOU）</div>
+        <div class="rel">中间 mutator 清成 null → PushRootToWorkStack 对地址 0 算 region 元数据 → <strong style="color:var(--red)">SIGSEGV</strong></div>
+      </div>
+      <div class="bug">
+        <div class="commit">bd0abd533c9 · 主题 1-1</div>
+        <div class="title">VisitGlobalRoots 被改成 no-op</div>
+        <div class="rel">STW 路径不走 publish → <strong style="color:var(--red)">全局根全丢</strong></div>
+      </div>
+      <div class="bug">
+        <div class="commit">45f52131f2c / b0c37d759ae · 主题 5</div>
+        <div class="title">FileCheck goldens：ptr addrspace(1)</div>
+        <div class="rel">是 stackmap 根的 tagged 指针表示，压缩位图模式下的产物</div>
+      </div>
+    </div>
+
+    <div class="callout yellow">
+      <strong>主题 5 那串 FileCheck golden 更新：</strong><code>addrspace(1)</code> 是 LLVM IR 里给指针加 address space 标记的方式，
+      在压缩位图 stackmap 模式下，堆指针被标成 <code>addrspace(1)</code>，GC 据此区分"这是堆引用，要扫"和"这是裸整数，别碰"。
+      <br/><br/>
+      <code>98483226536</code>（<code>fix: disable null-check fusion on stackmap targets for KT-50289</code>）说明这套机制对编译器优化也敏感——null-check fusion 会破坏 stackmap 发射的准确性，得在 stackmap target 上禁掉。
+    </div>
+
+    <div class="callout red">
+      <strong>一句话：</strong>你看不懂 stackmap，就看不懂 GC 为什么会扫到坏指针；看不懂坏指针，调查 CMC GC 崩溃就只能靠猜。
+      这也是为什么 problem-map 把"主题 1 → 主题 5"列在前面的学习顺序里。
+    </div>
+  </section>
+
+  <!-- 9. 小结 -->
+  <section>
+    <h2><span class="num">9</span>小结</h2>
+    <ul>
+      <li><strong>StackMap = 编译期发的"此刻哪些栈槽/寄存器是活引用"元数据</strong>，落在 <code>.llvm_stackmaps</code> 段，每个 GC 安全点一条 record。</li>
+      <li>GC 标记阶段靠它走真实 fp 链扫栈（<code>tryCollectRootSet</code> → <code>GetStackFrame</code> → <code>CollectStackMapBaseRoot</code>），而不是影子栈。</li>
+      <li>ON/OFF 是 per-target 编译开关；同一份 ON runtime 能安全链进 OFF app，靠的是 weak 引用 + 不可达路径。</li>
+      <li><strong>valid 位</strong>（bit 59，HWASan 下 bit 2）是分配器和 GC 之间的握手：对象头没写完置位前，GC 跳过它。</li>
+      <li>这条链上长过 UAF、TOCTOU SIGSEGV、no-op 漏扫——都是 GC 调查的高频坑。</li>
+    </ul>
+
+    <div class="callout">
+      <strong>下一篇建议：</strong>《Safepoint：mutator 怎么知道该停下来等 GC》——因为 stackmap 是贴在 safepoint 上的（每个 safepoint 一条 record），没有 safepoint 也就没有 stackmap。
+      而 <code>tryCollectRootSet</code> 之所以能安全读 mutator 的栈，前提是 mutator 此刻正停在某个 safepoint 上。这两件事是一体的两面。
+    </div>
+  </section>
+
+  <footer>
+    KN GC 内幕 · 第 2 篇 · StackMap · 知识卡片由原文档整理
+  </footer>
+</div>
+</body>
+</html>

@@ -1,0 +1,472 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>opencode 近期工作总结</title>
+<style>
+  :root {
+    --bg: #0f1117;
+    --panel: #1a1d27;
+    --panel-2: #20232f;
+    --border: #2a2e3c;
+    --text: #e6e8ee;
+    --muted: #8b8f9c;
+    --primary: #7F52FF;
+    --primary-soft: rgba(127, 82, 255, 0.15);
+    --red: #ff5c5c;
+    --green: #4ade80;
+    --yellow: #fbbf24;
+    --blue: #60a5fa;
+    --cyan: #22d3ee;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    line-height: 1.7;
+    -webkit-font-smoothing: antialiased;
+  }
+  code, pre, .mono {
+    font-family: "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
+  }
+  .wrap { max-width: 1100px; margin: 0 auto; padding: 40px 24px 80px; }
+
+  /* HERO */
+  .hero {
+    background: linear-gradient(135deg, rgba(127, 82, 255, 0.18), rgba(34, 211, 238, 0.1));
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 40px 32px;
+    margin-bottom: 32px;
+    position: relative;
+    overflow: hidden;
+  }
+  .hero::before {
+    content: ""; position: absolute; top: -50%; right: -10%;
+    width: 500px; height: 500px;
+    background: radial-gradient(circle, rgba(127, 82, 255, 0.3), transparent 70%);
+    pointer-events: none;
+  }
+  h1 { margin: 0 0 12px; font-size: 32px; line-height: 1.3; position: relative; }
+  .hero .sub { color: var(--muted); font-size: 14px; position: relative; }
+  .hero .stats {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 12px;
+    margin-top: 20px;
+    position: relative;
+  }
+  .stat {
+    background: rgba(0,0,0,0.2);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 12px 14px;
+    text-align: center;
+  }
+  .stat .num { font-size: 24px; font-weight: 700; color: var(--primary); }
+  .stat .lbl { font-size: 11px; color: var(--muted); margin-top: 4px; letter-spacing: 0.5px; }
+
+  /* SECTION */
+  section {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 28px 28px 24px;
+    margin-bottom: 24px;
+  }
+  section > h2 {
+    margin: 0 0 8px; font-size: 21px;
+    display: flex; align-items: center; gap: 10px;
+  }
+  .num-badge {
+    display: inline-flex;
+    width: 30px; height: 30px;
+    background: var(--primary);
+    color: white;
+    border-radius: 8px;
+    align-items: center; justify-content: center;
+    font-size: 14px; font-weight: 700;
+  }
+  section > .lead {
+    color: var(--muted);
+    margin: 0 0 20px;
+    font-size: 14px;
+  }
+
+  /* TASK CARD */
+  .task-card {
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 18px 20px;
+    margin-bottom: 14px;
+    border-left: 3px solid var(--primary);
+  }
+  .task-card.green { border-left-color: var(--green); }
+  .task-card.red { border-left-color: var(--red); }
+  .task-card.yellow { border-left-color: var(--yellow); }
+  .task-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    margin-bottom: 8px;
+    gap: 12px;
+  }
+  .task-title {
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--text);
+  }
+  .task-status {
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-weight: 600;
+    white-space: nowrap;
+  }
+  .task-status.done { background: rgba(74,222,128,0.15); color: var(--green); }
+  .task-status.partial { background: rgba(251,191,36,0.15); color: var(--yellow); }
+  .task-status.blocked { background: rgba(255,92,92,0.15); color: var(--red); }
+  .task-meta {
+    font-size: 12px;
+    color: var(--muted);
+    font-family: "JetBrains Mono", monospace;
+    margin-bottom: 8px;
+  }
+  .task-body { font-size: 14px; color: var(--text); }
+  .task-body ul { margin: 6px 0; padding-left: 22px; }
+  .task-body li { margin-bottom: 4px; }
+  .task-body code { color: var(--cyan); font-size: 13px; }
+
+  /* FILE LIST */
+  .file-list {
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 8px 0;
+    margin: 10px 0;
+  }
+  .file-row {
+    display: flex;
+    justify-content: space-between;
+    padding: 8px 16px;
+    font-size: 13px;
+    font-family: "JetBrains Mono", monospace;
+    border-bottom: 1px solid var(--border);
+  }
+  .file-row:last-child { border-bottom: none; }
+  .file-row .name { color: var(--cyan); }
+  .file-row .size { color: var(--muted); }
+
+  /* TIMELINE */
+  .timeline {
+    position: relative;
+    padding-left: 28px;
+    margin: 16px 0;
+  }
+  .timeline::before {
+    content: "";
+    position: absolute;
+    left: 8px; top: 4px; bottom: 4px;
+    width: 2px;
+    background: linear-gradient(180deg, var(--primary), var(--cyan));
+  }
+  .tl-item {
+    position: relative;
+    margin-bottom: 18px;
+  }
+  .tl-item::before {
+    content: "";
+    position: absolute;
+    left: -24px; top: 6px;
+    width: 12px; height: 12px;
+    border-radius: 50%;
+    background: var(--panel);
+    border: 2px solid var(--primary);
+  }
+  .tl-item.green::before { border-color: var(--green); background: var(--green); }
+  .tl-item.yellow::before { border-color: var(--yellow); }
+  .tl-item.red::before { border-color: var(--red); }
+  .tl-time { font-size: 11px; color: var(--muted); font-family: monospace; }
+  .tl-title { font-size: 14px; color: var(--text); font-weight: 600; margin-top: 2px; }
+  .tl-desc { font-size: 13px; color: var(--muted); margin-top: 2px; }
+
+  /* CALLOUT */
+  .callout {
+    border-left: 4px solid var(--primary);
+    background: var(--primary-soft);
+    padding: 14px 18px;
+    border-radius: 0 12px 12px 0;
+    margin: 16px 0;
+    font-size: 14px;
+  }
+  .callout.yellow { border-color: var(--yellow); background: rgba(251, 191, 36, 0.12); }
+  .callout.red { border-color: var(--red); background: rgba(255, 92, 92, 0.12); }
+  .callout.green { border-color: var(--green); background: rgba(74, 222, 128, 0.12); }
+  .callout strong { color: var(--primary); }
+  .callout.yellow strong { color: var(--yellow); }
+  .callout.red strong { color: var(--red); }
+  .callout.green strong { color: var(--green); }
+
+  /* TABLE */
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 16px 0;
+    font-size: 13.5px;
+    background: var(--panel-2);
+    border-radius: 10px;
+    overflow: hidden;
+  }
+  th, td {
+    padding: 12px 14px;
+    text-align: left;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+  }
+  th {
+    background: rgba(127, 82, 255, 0.08);
+    color: var(--primary);
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    font-weight: 700;
+  }
+  tr:last-child td { border-bottom: none; }
+  td code { color: var(--cyan); font-size: 12.5px; word-break: break-all; }
+
+  footer {
+    text-align: center;
+    color: var(--muted);
+    font-size: 12px;
+    padding: 24px;
+    border-top: 1px solid var(--border);
+    margin-top: 32px;
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <!-- HERO -->
+  <div class="hero">
+    <h1>opencode 近期工作总结</h1>
+    <div class="sub">本会话内 opencode 完成的任务、产出的文件、遇到的阻塞。</div>
+    <div class="stats">
+      <div class="stat"><div class="num">5</div><div class="lbl">完成任务</div></div>
+      <div class="stat"><div class="num">2</div><div class="lbl">HTML 卡片产出</div></div>
+      <div class="stat"><div class="num">1</div><div class="lbl">技术讨论</div></div>
+      <div class="stat"><div class="num">1</div><div class="lbl">阻塞</div></div>
+    </div>
+  </div>
+
+  <!-- 1. 产出文件 -->
+  <section>
+    <h2><span class="num-badge">1</span>产出文件</h2>
+    <p class="lead">本会话在 <code>/Users/issuser/code/</code> 下产出 2 个 HTML 知识卡片，总计 ~76KB。</p>
+
+    <div class="file-list">
+      <div class="file-row">
+        <span class="name">topic-1-1-card.html</span>
+        <span class="size">33.9 KB · 804 行 · 8/11 20:33</span>
+      </div>
+      <div class="file-row">
+        <span class="name">stackmap-card.html</span>
+        <span class="size">42.5 KB · 8/12 18:10</span>
+      </div>
+    </div>
+
+    <div class="callout">
+      <strong>两个 HTML 均为单文件自包含</strong>（内联 CSS、SVG 图解、代码块语法高亮），可直接 <code>open</code> 在浏览器查看，无需外部依赖。
+    </div>
+  </section>
+
+  <!-- 2. 任务详情 -->
+  <section>
+    <h2><span class="num-badge">2</span>任务详情</h2>
+    <p class="lead">按时间顺序列出本会话处理的核心任务、状态和产出。</p>
+
+    <div class="task-card green">
+      <div class="task-head">
+        <div class="task-title">① GitHub 仓库分析（affaan-m/ECC）</div>
+        <div class="task-status done">已完成</div>
+      </div>
+      <div class="task-meta">webfetch · README + SOUL.md</div>
+      <div class="task-body">
+        用户发来仓库链接并附错误数据（18万 Star / 48 Agent / 182 Skill）。
+        抓取实际 README 核对，纠正了 4 处事实错误：
+        <ul>
+          <li>Star 数：18万 → 实际 <strong style="color:var(--green)">239k</strong></li>
+          <li>Agent 数：48 → 实际 <strong style="color:var(--green)">68</strong></li>
+          <li>Skill 数：182 → 实际 <strong style="color:var(--green)">285</strong></li>
+          <li>命令数：68 → 实际 <strong style="color:var(--green)">94</strong></li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="task-card green">
+      <div class="task-head">
+        <div class="task-title">② topic-1-1 知识卡片 HTML</div>
+        <div class="task-status done">已完成</div>
+      </div>
+      <div class="task-meta">源文件：z-develop/topic-1-1-VisitGlobalRoots-noop-STW-root-loss.md</div>
+      <div class="task-body">
+        找到 Markdown 文档，转成图文并茂的 HTML 知识卡片，包含：
+        <ul>
+          <li>Hero + 元信息卡（commit / 分支 / 用例 / 失败变化 0→3）</li>
+          <li>3 张 SVG 图解（GC Root 扫描路径对比 / 契约不匹配 / 修复流程）</li>
+          <li>代码对照（no-op 版 vs Publish+委托版）</li>
+          <li>3 个 FAIL 用例卡片 + 关键代码片段</li>
+          <li>7 步提交链时间线（本文 commit 高亮）</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="task-card red">
+      <div class="task-head">
+        <div class="task-title">③ 飞书桥发送 HTML 文件</div>
+        <div class="task-status blocked">阻塞</div>
+      </div>
+      <div class="task-meta">feishu-opencode-bridge · send-file.mjs</div>
+      <div class="task-body">
+        用户要求通过飞书桥把 HTML 发到飞书。完成了全套排查：
+        <ul>
+          <li>找到桥进程：<code>feishuBot.mjs</code>（PID 40121）</li>
+          <li>读源码发现 <code>sendToFeishu</code> 只支持 <code>msg_type: "text"</code>，无文件上传</li>
+          <li>从日志拿到 chatId：<code>oc_9591c66b0ad130093ea015bbcb7e0460</code></li>
+          <li>写 <code>send-file.mjs</code> 调 <code>client.im.file.create</code> 上传文件</li>
+          <li>执行失败：<strong style="color:var(--red)">错误码 99991672</strong> — App <code>cli_aaf3f9f709b91be4</code> 缺权限 <code>im:resource:upload</code></li>
+        </ul>
+        <strong>根因：飞书 App 未开通文件上传权限</strong>，需去开放平台后台开通。
+      </div>
+    </div>
+
+    <div class="task-card green">
+      <div class="task-head">
+        <div class="task-title">④ StackMap 知识卡片 HTML</div>
+        <div class="task-status done">已完成</div>
+      </div>
+      <div class="task-meta">源文件：feishu-inbox/...-02-stackmap-为什么Kotlin-Native的GC需要它.md</div>
+      <div class="task-body">
+        读取 260 行技术文档，转成 9 节 HTML 知识卡片，包含：
+        <ul>
+          <li>5 张 SVG 图解（根集合三类 / stackmap 段布局 / tryCollectRootSet 流程 / bit 59/2 位置 / ON-OFF 同源 runtime）</li>
+          <li>代码块带语法高亮和步骤编号（①-⑨）</li>
+          <li>4 个 bug 卡片（UAF / TOCTOU SIGSEGV / no-op 漏扫 / FileCheck golden）</li>
+          <li>关键 callout：黑历史、典型 bug、设计本质</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="task-card yellow">
+      <div class="task-head">
+        <div class="task-title">⑤ 12 Tag 在 CRT 设置合理性讨论</div>
+        <div class="task-status partial">讨论完成</div>
+      </div>
+      <div class="task-meta">源材料：4 份日志 tag 文档（z-develop/日志tag/）</div>
+      <div class="task-body">
+        并行读 4 份文档（<code>runtime-日志tag-详细.md</code> 646 行、<code>CRT-CMC日志机制清单.md</code> 154 行、<code>tag日志实测-功能核对.md</code> 310 行），从 5 个维度讨论：
+        <ul>
+          <li>tag 语义边界跟着实现走而非关注点（不合理）</li>
+          <li>GC tag 在 CRT 下变成"杂物筐"（部分合理）</li>
+          <li>tag 粒度不均衡（CMS 视角合理，CMC 冗余）</li>
+          <li>CMC 下 7 个无输出：3 合理 + 3 真实缺口 + 1 待定</li>
+          <li>双日志系统割裂（结构性问题）</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- 3. 时间线 -->
+  <section>
+    <h2><span class="num-badge">3</span>会话时间线</h2>
+    <p class="lead">从最早到最近的执行顺序。</p>
+
+    <div class="timeline">
+      <div class="tl-item">
+        <div class="tl-time">8/11 20:33</div>
+        <div class="tl-title">topic-1-1-card.html 生成</div>
+        <div class="tl-desc">从 z-develop 文档转 HTML 知识卡片</div>
+      </div>
+      <div class="tl-item red">
+        <div class="tl-time">8/11 20:38</div>
+        <div class="tl-title">飞书桥发送尝试失败</div>
+        <div class="tl-desc">权限不足 im:resource:upload（错误 99991672）</div>
+      </div>
+      <div class="tl-item green">
+        <div class="tl-time">8/12 18:10</div>
+        <div class="tl-title">stackmap-card.html 生成</div>
+        <div class="tl-desc">260 行 Markdown → 9 节 HTML + 5 张 SVG</div>
+      </div>
+      <div class="tl-item yellow">
+        <div class="tl-time">8/14（当前）</div>
+        <div class="tl-title">12 Tag 合理性讨论</div>
+        <div class="tl-desc">读 4 份文档 1110 行，5 维度分析</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 4. 阻塞与未完成 -->
+  <section>
+    <h2><span class="num-badge">4</span>阻塞与未完成</h2>
+    <p class="lead">需要用户介入或外部条件才能推进的事项。</p>
+
+    <div class="callout red">
+      <strong>阻塞 1 · 飞书文件发送权限</strong><br/>
+      飞书 App <code>cli_aaf3f9f709b91be4</code> 缺 <code>im:resource:upload</code> 权限。
+      <br/>解决：去 <code>https://open.feishu.cn/app/cli_aaf3f9f709b91be4/auth?q=im:resource:upload</code> 开通，开通后重跑 <code>send-file.mjs</code>。
+    </div>
+
+    <div class="callout yellow">
+      <strong>未完成 · Kotlin GC 水位线 / OOM 分析</strong><br/>
+      用户提了"找 Kotlin 仓库 GC 水位线和 OOM 关系 + CMStestcase 高压力用例分析"，派了子 Agent 但两次都空回（环境问题），自己挖源码时被中断。
+      <br/>下一步：直接 grep <code>watermark|threshold|heap_limit|OOM|OutOfMemory</code> 在 <code>kotlin-native/runtime/src/</code> 下挖。
+    </div>
+  </section>
+
+  <!-- 5. 技术亮点 -->
+  <section>
+    <h2><span class="num-badge">5</span>技术亮点</h2>
+    <p class="lead">本次工作里几个值得记录的工程做法。</p>
+
+    <table>
+      <thead>
+        <tr>
+          <th>做法</th>
+          <th>说明</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>事实核查优先</td>
+          <td>用户给的仓库数据有误，先 webfetch 抓实际 README 核对再回应，不照搬用户说法</td>
+        </tr>
+        <tr>
+          <td>桥源码逆向</td>
+          <td>用户说"飞书桥"但没说怎么发文件，自己读 <code>feishuBot.mjs</code> 源码 + <code>feishu-sessions.json</code> + 日志拿到 chatId，写脚本调 SDK</td>
+        </tr>
+        <tr>
+          <td>systematic-debugging 流程</td>
+          <td>飞书发送失败时按 Phase 1-4 走：读错误码 → 对比工作/不工作模式 → 形成假设 → 确认根因是权限而非代码</td>
+        </tr>
+        <tr>
+          <td>多文档并行读取</td>
+          <td>12 Tag 讨论时一次并行读 2 份大文档（CRT-CMC清单 + 详细打点清单），再读第 3 份（功能核对），减少往返</td>
+        </tr>
+        <tr>
+          <td>HTML 单文件自包含</td>
+          <td>知识卡片内联 CSS + SVG + 代码高亮，无外部依赖，直接浏览器打开</td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <footer>
+    opencode 近期工作总结 · 基于本会话实际产出整理
+  </footer>
+</div>
+</body>
+</html>

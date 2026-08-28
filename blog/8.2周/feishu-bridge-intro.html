@@ -1,0 +1,865 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>飞书 opencode 桥 · 功能介绍</title>
+<style>
+  :root {
+    --bg: #0f1117;
+    --panel: #1a1d27;
+    --panel-2: #20232f;
+    --border: #2a2e3c;
+    --text: #e6e8ee;
+    --muted: #8b8f9c;
+    --primary: #7F52FF;
+    --primary-soft: rgba(127, 82, 255, 0.15);
+    --red: #ff5c5c;
+    --red-soft: rgba(255, 92, 92, 0.12);
+    --green: #4ade80;
+    --green-soft: rgba(74, 222, 128, 0.12);
+    --yellow: #fbbf24;
+    --yellow-soft: rgba(251, 191, 36, 0.12);
+    --blue: #60a5fa;
+    --cyan: #22d3ee;
+    --feishu: #3370ff;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    line-height: 1.7;
+    -webkit-font-smoothing: antialiased;
+  }
+  code, pre, .mono {
+    font-family: "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
+  }
+  .wrap { max-width: 1100px; margin: 0 auto; padding: 40px 24px 80px; }
+
+  /* HERO */
+  .hero {
+    background: linear-gradient(135deg, rgba(51, 112, 255, 0.18), rgba(127, 82, 255, 0.12));
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 40px 32px;
+    margin-bottom: 32px;
+    position: relative;
+    overflow: hidden;
+  }
+  .hero::before {
+    content: ""; position: absolute; top: -40%; right: -10%;
+    width: 500px; height: 500px;
+    background: radial-gradient(circle, rgba(51, 112, 255, 0.25), transparent 70%);
+    pointer-events: none;
+  }
+  .badge {
+    display: inline-flex; align-items: center; gap: 6px;
+    background: var(--primary-soft);
+    border: 1px solid rgba(127, 82, 255, 0.4);
+    color: var(--primary);
+    padding: 4px 12px; border-radius: 999px;
+    font-size: 12px; font-weight: 600;
+    margin-bottom: 16px; letter-spacing: 0.5px;
+  }
+  .badge .dot { width: 6px; height: 6px; background: var(--primary); border-radius: 50%; }
+  h1 { margin: 0 0 12px; font-size: 30px; line-height: 1.3; position: relative; }
+  .hero .sub { color: var(--muted); font-size: 14px; position: relative; max-width: 700px; }
+  .hero .sub code { color: var(--feishu); }
+
+  .stats {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 12px;
+    margin-top: 20px;
+    position: relative;
+  }
+  .stat {
+    background: rgba(0,0,0,0.25);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 12px 14px;
+    text-align: center;
+  }
+  .stat .num { font-size: 22px; font-weight: 700; color: var(--feishu); }
+  .stat .lbl { font-size: 11px; color: var(--muted); margin-top: 4px; letter-spacing: 0.5px; }
+
+  /* SECTION */
+  section {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 28px 28px 24px;
+    margin-bottom: 24px;
+  }
+  section > h2 {
+    margin: 0 0 8px; font-size: 21px;
+    display: flex; align-items: center; gap: 10px;
+  }
+  .num-badge {
+    display: inline-flex;
+    width: 30px; height: 30px;
+    background: var(--feishu);
+    color: white;
+    border-radius: 8px;
+    align-items: center; justify-content: center;
+    font-size: 14px; font-weight: 700;
+  }
+  section > .lead {
+    color: var(--muted);
+    margin: 0 0 20px;
+    font-size: 14px;
+  }
+
+  /* SVG FIGURE */
+  .fig {
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 24px 20px;
+    margin: 16px 0;
+    text-align: center;
+  }
+  .fig svg { max-width: 100%; height: auto; }
+  .fig .cap {
+    color: var(--muted);
+    font-size: 12px;
+    margin-top: 10px;
+    text-align: center;
+  }
+
+  /* CALLOUT */
+  .callout {
+    border-left: 4px solid var(--primary);
+    background: var(--primary-soft);
+    padding: 14px 18px;
+    border-radius: 0 12px 12px 0;
+    margin: 16px 0;
+    font-size: 14px;
+  }
+  .callout.yellow { border-color: var(--yellow); background: var(--yellow-soft); }
+  .callout.yellow strong { color: var(--yellow); }
+  .callout.red { border-color: var(--red); background: var(--red-soft); }
+  .callout.red strong { color: var(--red); }
+  .callout.green { border-color: var(--green); background: var(--green-soft); }
+  .callout.green strong { color: var(--green); }
+  .callout strong { color: var(--primary); }
+
+  /* CODE */
+  .code-card {
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    overflow: hidden;
+    margin: 16px 0;
+  }
+  .code-card .head {
+    padding: 10px 16px;
+    border-bottom: 1px solid var(--border);
+    font-size: 12px;
+    color: var(--muted);
+    font-family: "JetBrains Mono", monospace;
+    display: flex; justify-content: space-between; align-items: center;
+  }
+  .code-card .head .tag {
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-weight: 600;
+  }
+  .tag.info { background: var(--primary-soft); color: var(--primary); }
+  .tag.bad { background: var(--red-soft); color: var(--red); }
+  .tag.good { background: var(--green-soft); color: var(--green); }
+  .code-card pre {
+    margin: 0;
+    padding: 16px;
+    overflow-x: auto;
+    font-size: 12.5px;
+    line-height: 1.65;
+  }
+  .c { color: #6b7280; font-style: italic; }
+  .k { color: #c084fc; }
+  .f { color: #60a5fa; }
+  .s { color: #fbbf24; }
+  .n { color: #4ade80; }
+  .t { color: #22d3ee; }
+
+  /* TABLE */
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 16px 0;
+    font-size: 13.5px;
+    background: var(--panel-2);
+    border-radius: 10px;
+    overflow: hidden;
+  }
+  th, td {
+    padding: 12px 14px;
+    text-align: left;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+  }
+  th {
+    background: rgba(51, 112, 255, 0.1);
+    color: var(--feishu);
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    font-weight: 700;
+  }
+  tr:last-child td { border-bottom: none; }
+  td code { color: var(--cyan); font-size: 12.5px; word-break: break-all; }
+
+  /* FEATURE GRID */
+  .features {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    gap: 14px;
+    margin: 16px 0;
+  }
+  .feat {
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 16px 18px;
+    border-top: 3px solid var(--feishu);
+  }
+  .feat .icon {
+    font-size: 22px;
+    margin-bottom: 8px;
+  }
+  .feat h4 {
+    margin: 0 0 6px;
+    font-size: 15px;
+    color: var(--text);
+  }
+  .feat p {
+    margin: 0;
+    font-size: 13px;
+    color: var(--muted);
+  }
+  .feat p code { color: var(--cyan); }
+
+  /* STEPS */
+  .steps { counter-reset: step; margin: 16px 0; }
+  .step-item {
+    counter-increment: step;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px 16px 14px 56px;
+    margin-bottom: 10px;
+    position: relative;
+    font-size: 14px;
+  }
+  .step-item::before {
+    content: counter(step);
+    position: absolute;
+    left: 16px; top: 14px;
+    width: 28px; height: 28px;
+    line-height: 28px;
+    text-align: center;
+    background: var(--feishu);
+    color: white;
+    border-radius: 50%;
+    font-weight: 700;
+    font-family: "JetBrains Mono", monospace;
+  }
+  .step-item code { color: var(--cyan); font-size: 13px; }
+
+  /* APPROVAL FLOW */
+  .approval-flow {
+    display: grid;
+    grid-template-columns: 1fr 60px 1fr;
+    gap: 12px;
+    align-items: center;
+    margin: 16px 0;
+  }
+  @media (max-width: 800px) {
+    .approval-flow { grid-template-columns: 1fr; }
+    .approval-flow .arrow { display: none; }
+  }
+  .approval-flow .arrow { text-align: center; color: var(--primary); font-size: 24px; }
+  .flow-card {
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px 16px;
+    font-size: 13px;
+  }
+  .flow-card .title {
+    font-weight: 600;
+    margin-bottom: 6px;
+    color: var(--primary);
+  }
+  .flow-card .title.red { color: var(--red); }
+  .flow-card .title.green { color: var(--green); }
+  .flow-card .title.yellow { color: var(--yellow); }
+
+  /* TROUBLESHOOT LIST */
+  .trouble {
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 8px 0;
+    margin: 10px 0;
+  }
+  .trouble-row {
+    padding: 10px 16px;
+    border-bottom: 1px solid var(--border);
+    font-size: 13px;
+  }
+  .trouble-row:last-child { border-bottom: none; }
+  .trouble-row .symptom {
+    color: var(--red);
+    font-weight: 600;
+    margin-bottom: 4px;
+  }
+  .trouble-row .fix {
+    color: var(--muted);
+  }
+  .trouble-row .fix code { color: var(--cyan); }
+
+  footer {
+    text-align: center;
+    color: var(--muted);
+    font-size: 12px;
+    padding: 24px;
+    border-top: 1px solid var(--border);
+    margin-top: 32px;
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <!-- HERO -->
+  <div class="hero">
+    <div class="badge"><span class="dot"></span> 飞书 opencode 桥 · 功能介绍</div>
+    <h1>飞书 → opencode 桥：在飞书里指挥本机 opencode 干活</h1>
+    <div class="sub">
+      把飞书机器人当作 opencode CLI 的远程入口——在飞书聊天框里发指令，桥在本机调 <code>opencode serve</code> 执行，
+      敏感操作（写文件、跑命令）先发审批消息等用户放行，结果回传飞书。launchd 常驻、崩溃自愈、零值守守。
+    </div>
+    <div class="stats">
+      <div class="stat"><div class="num">双向</div><div class="lbl">飞书 ⇄ 本机</div></div>
+      <div class="stat"><div class="num">3</div><div class="lbl">权限位</div></div>
+      <div class="stat"><div class="num">12MB</div><div class="lbl">桥内存</div></div>
+      <div class="stat"><div class="num">10s</div><div class="lbl">崩溃自愈</div></div>
+    </div>
+  </div>
+
+  <!-- 1. 一句话定位 -->
+  <section>
+    <h2><span class="num-badge">1</span>这是什么</h2>
+    <p class="lead">一句话定位 + 一张架构图。</p>
+
+    <div class="callout">
+      <strong>核心定位：</strong>飞书机器人 = opencode CLI 的远程入口。在飞书聊天框发指令 → 桥调本机
+      <code>opencode serve</code> → 敏感操作先发审批 → 用户回复"允许/拒绝" → 结果回传飞书。
+    </div>
+
+    <div class="fig">
+      <svg viewBox="0 0 900 280" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <marker id="arr-f1" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto">
+            <path d="M0,0 L8,4 L0,8 Z" fill="#3370ff"/>
+          </marker>
+          <marker id="arr-f2" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto">
+            <path d="M0,0 L8,4 L0,8 Z" fill="#4ade80"/>
+          </marker>
+        </defs>
+
+        <!-- 飞书侧 -->
+        <rect x="20" y="80" width="180" height="120" rx="12" fill="rgba(51,112,255,0.12)" stroke="#3370ff" stroke-width="2"/>
+        <text x="110" y="110" text-anchor="middle" fill="#3370ff" font-size="14" font-weight="700">飞书</text>
+        <text x="110" y="135" text-anchor="middle" fill="#e6e8ee" font-size="12">用户发指令</text>
+        <text x="110" y="153" text-anchor="middle" fill="#8b8f9c" font-size="11">"创建 /tmp/test.txt"</text>
+        <text x="110" y="178" text-anchor="middle" fill="#4ade80" font-size="11">收审批 + 回复结果</text>
+
+        <!-- 桥 -->
+        <rect x="290" y="60" width="220" height="160" rx="12" fill="rgba(127,82,255,0.12)" stroke="#7F52FF" stroke-width="2"/>
+        <text x="400" y="90" text-anchor="middle" fill="#7F52FF" font-size="14" font-weight="700">飞书桥（feishuBot.mjs）</text>
+        <text x="400" y="115" text-anchor="middle" fill="#e6e8ee" font-size="11">WebSocket 长连接</text>
+        <text x="400" y="135" text-anchor="middle" fill="#8b8f9c" font-size="11">· 接收飞书消息</text>
+        <text x="400" y="153" text-anchor="middle" fill="#8b8f9c" font-size="11">· 转发审批请求</text>
+        <text x="400" y="171" text-anchor="middle" fill="#8b8f9c" font-size="11">· 回传执行结果</text>
+        <text x="400" y="194" text-anchor="middle" fill="#fbbf24" font-size="11">+ POST /progress 端口</text>
+
+        <!-- opencode serve -->
+        <rect x="600" y="80" width="180" height="120" rx="12" fill="rgba(74,222,128,0.12)" stroke="#4ade80" stroke-width="2"/>
+        <text x="690" y="110" text-anchor="middle" fill="#4ade80" font-size="14" font-weight="700">opencode serve</text>
+        <text x="690" y="135" text-anchor="middle" fill="#e6e8ee" font-size="12">本机 HTTP API</text>
+        <text x="690" y="153" text-anchor="middle" fill="#8b8f9c" font-size="11">:41234</text>
+        <text x="690" y="178" text-anchor="middle" fill="#4ade80" font-size="11">LLM + 工具调用</text>
+
+        <!-- arrows -->
+        <line x1="200" y1="120" x2="285" y2="120" stroke="#3370ff" stroke-width="1.8" marker-end="url(#arr-f1)"/>
+        <text x="242" y="112" text-anchor="middle" fill="#3370ff" font-size="10">指令</text>
+        <line x1="285" y1="160" x2="200" y2="160" stroke="#4ade80" stroke-width="1.8" marker-end="url(#arr-f2)"/>
+        <text x="242" y="172" text-anchor="middle" fill="#4ade80" font-size="10">结果</text>
+
+        <line x1="510" y1="120" x2="595" y2="120" stroke="#7F52FF" stroke-width="1.8" marker-end="url(#arr-f1)"/>
+        <text x="552" y="112" text-anchor="middle" fill="#7F52FF" font-size="10">HTTP</text>
+        <line x1="595" y1="160" x2="510" y2="160" stroke="#7F52FF" stroke-width="1.8" marker-end="url(#arr-f1)"/>
+        <text x="552" y="172" text-anchor="middle" fill="#7F52FF" font-size="10">SSE</text>
+
+        <!-- launchd banner -->
+        <rect x="290" y="240" width="220" height="30" rx="6" fill="rgba(251,191,36,0.15)" stroke="#fbbf24" stroke-width="1.5"/>
+        <text x="400" y="259" text-anchor="middle" fill="#fbbf24" font-size="12" font-weight="600">launchd 常驻 · 崩溃自愈</text>
+      </svg>
+      <div class="cap">图 1 · 飞书桥架构：飞书 ⇄ 桥（WebSocket）⇄ opencode serve（HTTP/SSE）</div>
+    </div>
+  </section>
+
+  <!-- 2. 核心能力 -->
+  <section>
+    <h2><span class="num-badge">2</span>核心能力</h2>
+    <p class="lead">桥提供的 6 大能力。</p>
+
+    <div class="features">
+      <div class="feat">
+        <div class="icon">💬</div>
+        <h4>飞书指挥 opencode</h4>
+        <p>飞书聊天框发指令，桥调 <code>opencode serve</code> 执行，结果回传。多轮上下文连续。</p>
+      </div>
+      <div class="feat">
+        <div class="icon">🔐</div>
+        <h4>人工审批</h4>
+        <p>敏感操作（写文件、跑命令）先发审批消息，回复 <code>允许/拒绝/总是允许</code> 才放行。</p>
+      </div>
+      <div class="feat">
+        <div class="icon">📤</div>
+        <h4>进度推送端点</h4>
+        <p>任意本机程序 <code>POST /progress</code> 推消息到飞书，<strong>无需飞书凭证</strong>。</p>
+      </div>
+      <div class="feat">
+        <div class="icon">🔄</div>
+        <h4>launchd 常驻</h4>
+        <p>开机自启、崩溃 10s 内自动拉起。关掉所有终端仍在跑。</p>
+      </div>
+      <div class="feat">
+        <div class="icon">👥</div>
+        <h4>白名单授权</h4>
+        <p>只有 <code>OPENCODE_ALLOWED_USERS</code> 里的飞书账号能指挥，陌生人被拒。</p>
+      </div>
+      <div class="feat">
+        <div class="icon">⏱️</div>
+        <h4>超时保护</h4>
+        <p><code>OPENCODE_TIMEOUT_MS</code> 兜底，默认 45 分钟，防止任务卡死。</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- 3. 双通道架构 -->
+  <section>
+    <h2><span class="num-badge">3</span>双通道架构</h2>
+    <p class="lead">桥同时维护两条通道，方向和用途不同。</p>
+
+    <table>
+      <thead>
+        <tr>
+          <th>通道</th>
+          <th>方向</th>
+          <th>需要凭证</th>
+          <th>用途</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong style="color:var(--feishu)">主通道</strong><br/>飞书聊天 → 桥 → opencode serve</td>
+          <td>双向<br/>（飞书指挥 + 结果回传）</td>
+          <td>桥持有飞书 App Secret</td>
+          <td>主交互通道：发指令、收审批、看结果</td>
+        </tr>
+        <tr>
+          <td><strong style="color:var(--green)">进度通道</strong><br/><code>POST /progress</code></td>
+          <td>单向<br/>（本机 → 飞书）</td>
+          <td><strong style="color:var(--green)">无需凭证</strong></td>
+          <td>任意本地程序往飞书推消息（如编译完成通知）</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="callout yellow">
+      <strong>关键设计：</strong>进度通道复用桥已认证的飞书 SDK 身份发消息，调用方不需要任何飞书凭证——
+      任何能发 HTTP 请求的程序（curl / opencode 会话 / shell 脚本）都能往飞书推消息。
+    </div>
+
+    <div class="code-card">
+      <div class="head"><span>最简调用 · 一行 curl</span><span class="tag info">无需凭证</span></div>
+<pre>curl -X POST http://127.0.0.1:41235/progress \
+  -H <span class="s">"content-type: application/json"</span> \
+  -d <span class="s">'{"text":"阶段1 编译完成，kexe 1.6M，ELF aarch64 校验通过"}'</span></pre>
+    </div>
+
+    <div class="callout">
+      <strong>安全：</strong><code>/progress</code> 端点只绑 <code>127.0.0.1</code>，不对外网暴露，本机任何进程都能调。
+      如需限制，用 macOS 防火墙挡 41235，或在源码加 token 校验。
+    </div>
+  </section>
+
+  <!-- 4. 权限审批机制 -->
+  <section>
+    <h2><span class="num-badge">4</span>权限审批机制</h2>
+    <p class="lead">敏感操作不会直接执行，先发审批消息等用户放行。</p>
+
+    <div class="approval-flow">
+      <div class="flow-card">
+        <div class="title">opencode 触发敏感操作</div>
+        <div>如 <code>edit /tmp/test.txt</code>，权限规则判定需要 <code>ask</code></div>
+      </div>
+      <div class="arrow">→</div>
+      <div class="flow-card">
+        <div class="title red">桥发审批消息到飞书</div>
+        <div>显示操作类型 + 文件路径 + 修改内容 diff</div>
+      </div>
+    </div>
+
+    <div class="approval-flow">
+      <div class="flow-card">
+        <div class="title yellow">用户回复</div>
+        <div>
+          <code>允许</code> / <code>拒绝</code> / <code>总是允许</code><br/>
+          多个待审时可 <code>允许 2</code> / <code>拒绝 #3</code> 指定
+        </div>
+      </div>
+      <div class="arrow">→</div>
+      <div class="flow-card">
+        <div class="title green">桥放行 / 中止</div>
+        <div>放行后 opencode 继续执行，结果回传飞书</div>
+      </div>
+    </div>
+
+    <div class="code-card">
+      <div class="head"><span>审批消息示例</span><span class="tag info">用户视角</span></div>
+<pre>🔐 opencode 请求授权
+操作：edit
+文件：/tmp/test.txt
+修改内容：
++hello
+回复「允许」继续，「拒绝」中止，「总是允许」本次会话后自动放行</pre>
+    </div>
+
+    <div class="callout green">
+      <strong>三种回复语义：</strong>
+      <ul style="margin:6px 0; padding-left:22px;">
+        <li><code>允许</code> → 该次操作继续执行</li>
+        <li><code>拒绝</code> → 中止该操作</li>
+        <li><code>总是允许</code> → 同范围后续自动放行（会记住，整会话有效）</li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- 5. launchd 常驻与自愈 -->
+  <section>
+    <h2><span class="num-badge">5</span>launchd 常驻与崩溃自愈</h2>
+    <p class="lead">桥作为用户级 LaunchAgent 运行，开机自启 + 崩溃即拉。</p>
+
+    <div class="fig">
+      <svg viewBox="0 0 900 200" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <marker id="arr-l1" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto">
+            <path d="M0,0 L8,4 L0,8 Z" fill="#fbbf24"/>
+          </marker>
+          <marker id="arr-l2" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto">
+            <path d="M0,0 L8,4 L0,8 Z" fill="#4ade80"/>
+          </marker>
+        </defs>
+
+        <!-- launchd -->
+        <rect x="20" y="70" width="160" height="60" rx="10" fill="rgba(251,191,36,0.15)" stroke="#fbbf24" stroke-width="2"/>
+        <text x="100" y="98" text-anchor="middle" fill="#fbbf24" font-size="13" font-weight="700">launchd (PID 1)</text>
+        <text x="100" y="118" text-anchor="middle" fill="#8b8f9c" font-size="11">系统 init</text>
+
+        <!-- bridge -->
+        <rect x="260" y="50" width="200" height="100" rx="10" fill="rgba(127,82,255,0.12)" stroke="#7F52FF" stroke-width="2"/>
+        <text x="360" y="78" text-anchor="middle" fill="#7F52FF" font-size="13" font-weight="700">feishuBot.mjs</text>
+        <text x="360" y="98" text-anchor="middle" fill="#e6e8ee" font-size="11">PPID=1（launchd 直接托管）</text>
+        <text x="360" y="116" text-anchor="middle" fill="#8b8f9c" font-size="11">CPU 0% · RSS 12MB</text>
+        <text x="360" y="134" text-anchor="middle" fill="#8b8f9c" font-size="11">WebSocket 长连接</text>
+
+        <!-- serve -->
+        <rect x="540" y="70" width="180" height="60" rx="10" fill="rgba(74,222,128,0.12)" stroke="#4ade80" stroke-width="2"/>
+        <text x="630" y="98" text-anchor="middle" fill="#4ade80" font-size="13" font-weight="700">opencode serve</text>
+        <text x="630" y="118" text-anchor="middle" fill="#8b8f9c" font-size="11">PPID=bridge · :41234</text>
+
+        <!-- arrows -->
+        <line x1="180" y1="100" x2="255" y2="100" stroke="#fbbf24" stroke-width="1.8" marker-end="url(#arr-l1)"/>
+        <line x1="460" y1="100" x2="535" y2="100" stroke="#4ade80" stroke-width="1.8" marker-end="url(#arr-l2)"/>
+
+        <!-- crash recovery -->
+        <rect x="780" y="50" width="100" height="100" rx="10" fill="rgba(255,92,92,0.1)" stroke="#ff5c5c" stroke-width="1.5" stroke-dasharray="4 3"/>
+        <text x="830" y="80" text-anchor="middle" fill="#ff5c5c" font-size="11" font-weight="700">崩溃</text>
+        <text x="830" y="100" text-anchor="middle" fill="#8b8f9c" font-size="10">SIGCHLD</text>
+        <text x="830" y="116" text-anchor="middle" fill="#8b8f9c" font-size="10">→ 10s 内</text>
+        <text x="830" y="132" text-anchor="middle" fill="#4ade80" font-size="10">重新 spawn</text>
+      </svg>
+      <div class="cap">图 2 · launchd 父子关系：launchd (PID 1) 直接托管桥，桥 spawn 出 serve。崩溃自动拉起。</div>
+    </div>
+
+    <table>
+      <thead>
+        <tr>
+          <th>launchd 字段</th>
+          <th>实测值</th>
+          <th>含义</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>type</code></td>
+          <td>LaunchAgent</td>
+          <td>用户级 agent，登录后启动，注销后停止</td>
+        </tr>
+        <tr>
+          <td><code>state</code></td>
+          <td>running</td>
+          <td>当前在跑</td>
+        </tr>
+        <tr>
+          <td><code>keepalive</code></td>
+          <td>true</td>
+          <td>进程退出立即重新 spawn（崩溃自愈的关键）</td>
+        </tr>
+        <tr>
+          <td><code>runatload</code></td>
+          <td>true</td>
+          <td>开机/登录自动启动</td>
+        </tr>
+        <tr>
+          <td><code>jetsam memory limit</code></td>
+          <td>unlimited</td>
+          <td>不被系统内存压力杀</td>
+        </tr>
+        <tr>
+          <td><code>exit timeout</code></td>
+          <td>5 秒</td>
+          <td>SIGTERM 后等 5s 不退就 SIGKILL</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="callout yellow">
+      <strong>关键限制：</strong>launchd 能拉起<strong>进程</strong>但恢复不了<strong>会话状态</strong>。
+      桥崩溃后新桥复用旧 serve，但旧 serve 里卡住的 write 会话还在，新桥不感知 →
+      用户看到的现象是"桥活了，但旧指令没继续"。这才是要修的根因。
+    </div>
+  </section>
+
+  <!-- 6. 资源占用 -->
+  <section>
+    <h2><span class="num-badge">6</span>资源占用</h2>
+    <p class="lead">空闲稳态实测（2026-08-10），近理论最低。</p>
+
+    <table>
+      <thead>
+        <tr>
+          <th>进程</th>
+          <th>CPU</th>
+          <th>内存</th>
+          <th>说明</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>feishuBot.mjs</code>（桥）</td>
+          <td>0.0%</td>
+          <td>~54 MB</td>
+          <td>挂在飞书 WebSocket 长连接，事件驱动，无轮询</td>
+        </tr>
+        <tr>
+          <td><code>opencode serve</code></td>
+          <td>0.0~1.3%</td>
+          <td>~360 MB</td>
+          <td>HTTP 监听 127.0.0.1:41234，无请求时 idle</td>
+        </tr>
+        <tr>
+          <td>launchd 本身</td>
+          <td>0%</td>
+          <td>0</td>
+          <td>只是配置 + 进程表项，KeepAlive 是内核事件通知，不轮询</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="callout green">
+      <strong>结论：</strong>空闲功耗已近理论最低，无需再加守护/降功耗进程——任何 watchdog 自己也要运行和唤醒，属于负优化。
+      macOS 的 App Nap 还会自动压制无活动后台进程。
+    </div>
+
+    <div class="callout yellow">
+      <strong>不建议为省 360MB 改为"用时再启动 serve"：</strong>opencode 冷启动需加载 36+ 插件，
+      首条指令可能挂几分钟（见进度文档"踩过的坑"第 2 条），会破坏随时聊天的体验。
+      <strong>常驻保温是合理取舍</strong>。
+    </div>
+  </section>
+
+  <!-- 7. 使用流程 -->
+  <section>
+    <h2><span class="num-badge">7</span>使用流程</h2>
+    <p class="lead">从配对到日常使用的完整步骤。</p>
+
+    <div class="steps">
+      <div class="step-item">
+        <strong>首次配对：</strong>在飞书找到机器人发一条消息，机器人回复身份 id（<code>ou_xxx</code> / <code>uu_xxx</code> / <code>on_xxx</code>）。
+      </div>
+      <div class="step-item">
+        <strong>填白名单：</strong>把 <code>ou_</code> 开头的 id 填入 <code>.env</code> 的 <code>OPENCODE_ALLOWED_USERS</code>，重启桥。
+      </div>
+      <div class="step-item">
+        <strong>发指令：</strong>飞书聊天框发指令，如"用 write 工具创建文件 /tmp/test.txt，内容 hello"。
+      </div>
+      <div class="step-item">
+        <strong>审批：</strong>opencode 需要写文件时，机器人发审批消息，回复 <code>允许</code> / <code>拒绝</code> / <code>总是允许</code>。
+      </div>
+      <div class="step-item">
+        <strong>看结果：</strong>执行完成后，opencode 的结果回传飞书。同一会话上下文连续（多轮协作）。
+      </div>
+    </div>
+
+    <div class="callout green">
+      <strong>成功标志：</strong>能收到审批消息并放行 = 整条链路通了。
+      <ul style="margin:6px 0; padding-left:22px;">
+        <li>未授权用户发消息会被拒绝（白名单外）</li>
+        <li>opencode 执行过程日志实时写入 <code>data/opencode-logs/</code>（可 <code>tail -f</code>）</li>
+        <li>回复超 4000 字符会截断并标注，属预期</li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- 8. 日常运维 -->
+  <section>
+    <h2><span class="num-badge">8</span>日常运维命令</h2>
+    <p class="lead">launchd 常驻后的常用操作。</p>
+
+    <table>
+      <thead>
+        <tr>
+          <th>动作</th>
+          <th>命令 / 操作</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>查看运行状态</td>
+          <td><code>launchctl print gui/$(id -u)/com.hackthon.feishu-opencode-bridge | head -5</code></td>
+        </tr>
+        <tr>
+          <td>手动重启</td>
+          <td><code>launchctl kickstart gui/$(id -u)/com.hackthon.feishu-opencode-bridge</code></td>
+        </tr>
+        <tr>
+          <td>手动停止</td>
+          <td><code>launchctl kill SIGTERM gui/$(id -u)/com.hackthon.feishu-opencode-bridge</code></td>
+        </tr>
+        <tr>
+          <td>彻底停用常驻</td>
+          <td><code>launchctl bootout gui/$(id -u)/com.hackthon.feishu-opencode-bridge</code></td>
+        </tr>
+        <tr>
+          <td>重新启用</td>
+          <td><code>launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.hackthon.feishu-opencode-bridge.plist</code></td>
+        </tr>
+        <tr>
+          <td>看日志</td>
+          <td><code>tail -f data/opencode-logs/feishu-bot.launchd.log</code>（stderr 同目录 <code>.err.log</code>）</td>
+        </tr>
+        <tr>
+          <td>改工作目录</td>
+          <td>改 <code>.env</code> 的 <code>OPENCODE_DIR</code> 后 <code>kickstart</code> 重启</td>
+        </tr>
+        <tr>
+          <td>多授权一人</td>
+          <td><code>OPENCODE_ALLOWED_USERS=ou_aaa,ou_bbb</code>（逗号分隔）后 <code>kickstart</code> 重启</td>
+        </tr>
+        <tr>
+          <td>限制单条执行时长</td>
+          <td><code>.env</code> 加 <code>OPENCODE_TIMEOUT_MS=600000</code>（10 分钟，到点 kill）</td>
+        </tr>
+        <tr>
+          <td>清空会话记忆</td>
+          <td>删除 <code>data/feishu-sessions.json</code> 后 <code>kickstart</code> 重启</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="callout yellow">
+      <strong>注意事项：</strong>plist 里 node 路径写死为 <code>~/.nvm/versions/node/v24.14.1/bin/node</code>；
+      如果以后用 nvm 升级/切换了 Node 版本，需要同步修改 plist 里的 <code>ProgramArguments</code> 和 <code>PATH</code>。
+    </div>
+  </section>
+
+  <!-- 9. 排错速查 -->
+  <section>
+    <h2><span class="num-badge">9</span>排错速查</h2>
+    <p class="lead">常见现象 + 处理。</p>
+
+    <div class="trouble">
+      <div class="trouble-row">
+        <div class="symptom">启动报「缺少 FEISHU_APP_ID / FEISHU_APP_SECRET」</div>
+        <div class="fix"><code>.env</code> 没填或没保存</div>
+      </div>
+      <div class="trouble-row">
+        <div class="symptom">启动后看不到「长连接已启动」、全是 <code>[error] [ws] connect failed</code></div>
+        <div class="fix">App ID/Secret 错误，或应用未发布</div>
+      </div>
+      <div class="trouble-row">
+        <div class="symptom">发消息没任何反应（日志也无事件）</div>
+        <div class="fix">① 应用未发布 ② 事件没添加 <code>im.message.receive_v1</code> ③ 订阅方式不是长连接 ④ 这个应用被 OpenClaw 等其它进程占用（换新应用）</div>
+      </div>
+      <div class="trouble-row">
+        <div class="symptom">机器人回「🚫 未授权」</div>
+        <div class="fix">正常首次行为，按配对流程把 <code>ou_</code> id 填进 <code>OPENCODE_ALLOWED_USERS</code> 重启</div>
+      </div>
+      <div class="trouble-row">
+        <div class="symptom">机器人回「❌ opencode 出错」</div>
+        <div class="fix">opencode 执行失败，回复里带 exit code 和 stderr；检查 <code>OPENCODE_DIR</code> 是否存在、opencode 是否有权限访问</div>
+      </div>
+      <div class="trouble-row">
+        <div class="symptom">指令发出后没有收到 🔐 审批消息</div>
+        <div class="fix">该操作不在 <code>ask</code> 规则内（被 <code>allow</code>/<code>deny</code>）；或权限请求挂起中但 SSE 断了（桥日志看 <code>[opencode-serve] SSE 断开</code>，3s 自动重连）</div>
+      </div>
+      <div class="trouble-row">
+        <div class="symptom">回复了「允许」但没反应</div>
+        <div class="fix">审批请求可能已过期（会话被 abort）；查看桥日志的 <code>权限回复失败</code>，或重发指令</div>
+      </div>
+      <div class="trouble-row">
+        <div class="symptom">机器人回「⏱️ 执行超时」</div>
+        <div class="fix">任务跑太久（默认 45 分钟兜底），或权限一直没人批导致挂起；检查是否有未处理的 🔐 审批消息</div>
+      </div>
+      <div class="trouble-row">
+        <div class="symptom">回复被截断</div>
+        <div class="fix">回复超 4000 字符会截断并标注，属预期</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 10. 安全须知 -->
+  <section>
+    <h2><span class="num-badge">10</span>安全须知</h2>
+    <p class="lead">三条红线。</p>
+
+    <div class="callout red">
+      <strong>红线 1 · 白名单是唯一防线：</strong>能私聊机器人 = 能指挥本机 opencode 执行代码。
+      只放行你信任的账号。
+    </div>
+
+    <div class="callout red">
+      <strong>红线 2 · App Secret 等同于本机执行权限：</strong>别泄露、别提交到 git（<code>.env</code> 已被忽略）。
+    </div>
+
+    <div class="callout red">
+      <strong>红线 3 · 别和 OpenClaw 复用应用：</strong>同一应用多个长连接会随机抢事件，导致两边都收不全消息。
+      <strong>必须新建应用</strong>。
+    </div>
+  </section>
+
+  <footer>
+    飞书 opencode 桥 · 功能介绍 · 基于接入指南文档整理
+  </footer>
+</div>
+</body>
+</html>

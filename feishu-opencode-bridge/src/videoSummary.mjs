@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { join, basename } from "node:path";
 import { spawn } from "node:child_process";
 
@@ -44,7 +44,8 @@ export async function summarizeVideo(url, opts = {}) {
 
   onProgress("fetch-audio", { url });
   const audioPath = await downloadAudio(url, downloadDir);
-  if (!audioPath) throw new Error("无法下载音频");
+  // downloadAudio 失败时会抛带原始 stderr 的 Error;这里只剩"未产出文件"的兜底
+  if (!audioPath) throw new Error("yt-dlp 退出码 0 但未产出音频文件(可能被 --max-filesize 拦截)");
 
   onProgress("transcribe", { audioPath });
   const apiKey = opts.llm?.apiKey || OPENAI_API_KEY;
@@ -72,7 +73,7 @@ async function fetchSubtitle(url, downloadDir) {
     "--write-auto-sub", "--write-sub",
     "--sub-lang", "zh,en",
     "--sub-format", "vtt/srt",
-    "--convert-subs", "txt",
+    // yt-dlp 不支持 --convert-subs txt,改用 vtt/srt 原格式下载,代码里再剥时间戳成纯文本。
     "--print", "%(title)s",
   ];
   const mf = durationMatchFilter();
@@ -80,15 +81,39 @@ async function fetchSubtitle(url, downloadDir) {
   args.push("-o", join(downloadDir, "%(id)s.%(ext)s"), url);
   const { stdout, code } = await runCmd(YT_DLP_BIN, args);
   if (code !== 0) return { ok: false };
-  const files = readdirSync(downloadDir)
+  // yt-dlp 写出 .vtt/.srt 文件,这里按 mtime 倒序找第一个字幕文件并剥成纯文本。
+  const subFiles = readdirSync(downloadDir)
+    .filter((f) => /\.(vtt|srt)$/i.test(f))
     .map((f) => ({ f, mtime: statSync(join(downloadDir, f)).mtimeMs }))
-    .filter((x) => x.f.endsWith(".txt"))
     .sort((a, b) => b.mtime - a.mtime);
-  if (!files.length) return { ok: false };
-  const transcriptPath = join(downloadDir, files[0].f);
-  const transcript = readFileSync(transcriptPath, "utf8").trim();
+  if (!subFiles.length) return { ok: false };
+  const subPath = join(downloadDir, subFiles[0].f);
+  const transcript = stripSubtitles(readFileSync(subPath, "utf8"));
   if (transcript.length < 50) return { ok: false };
+  const transcriptPath = subPath + ".txt";
+  writeFileSync(transcriptPath, transcript, "utf8");
   return { ok: true, title: stdout.trim().split("\n")[0], transcript, transcriptPath };
+}
+
+/**
+ * 把 vtt/srt 字幕剥成纯文本:去时间戳、去 WEBVTT 头、去块号、去重复行(B 站自动字幕常有重复)。
+ * 保留剥离前后的纯文本,长度 < 50 视为无效字幕。
+ */
+function stripSubtitles(raw) {
+  const seen = new Set();
+  const lines = [];
+  for (const line of raw.split(/\r?\n/)) {
+    const s = line.trim();
+    if (!s) continue;
+    if (s.startsWith("WEBVTT")) continue;
+    if (/^\d+$/.test(s)) continue;                          // srt 块号
+    if (/-->/.test(s)) continue;                           // 时间戳行
+    if (/^(align|position):/i.test(s)) continue;           // vtt 样式行
+    if (seen.has(s)) continue;                             // 去重(B 站自动字幕常逐句重复)
+    seen.add(s);
+    lines.push(s);
+  }
+  return lines.join(" ").replace(/\s+/g, " ").trim();
 }
 
 async function downloadAudio(url, downloadDir) {
@@ -103,7 +128,9 @@ async function downloadAudio(url, downloadDir) {
       const maxSec = Number(process.env.VIDEO_MAX_DURATION_SEC || 0) || 0;
       throw new Error(`视频时长超过上限 ${maxSec} 秒,已拒绝下载(可调整 .env 的 VIDEO_MAX_DURATION_SEC)`);
     }
-    return null;
+    // yt-dlp 不可执行(spawn ENOENT)或返回非零退出码:把原始 stderr 带出,
+    // 让上层 feishuBotCore.mjs 的 ENOENT 检测能命中,其它失败也能看到真实原因。
+    throw new Error(`yt-dlp 退出码 ${code}: ${stderr.slice(-500).trim()}`);
   }
   const files = readdirSync(downloadDir)
     .filter((f) => /\.(mp3|m4a|webm|opus|wav)$/i.test(f))

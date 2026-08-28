@@ -1,0 +1,697 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>周报 · 2026-08-10 ~ 08-16</title>
+<style>
+  :root {
+    --bg: #0f1117;
+    --panel: #1a1d27;
+    --panel-2: #20232f;
+    --border: #2a2e3c;
+    --text: #e6e8ee;
+    --muted: #8b8f9c;
+    --primary: #7F52FF;
+    --primary-soft: rgba(127, 82, 255, 0.15);
+    --red: #ff5c5c;
+    --red-soft: rgba(255, 92, 92, 0.12);
+    --green: #4ade80;
+    --green-soft: rgba(74, 222, 128, 0.12);
+    --yellow: #fbbf24;
+    --yellow-soft: rgba(251, 191, 36, 0.12);
+    --blue: #60a5fa;
+    --cyan: #22d3ee;
+    --feishu: #3370ff;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    line-height: 1.7;
+    -webkit-font-smoothing: antialiased;
+  }
+  code, pre, .mono {
+    font-family: "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
+  }
+  .wrap { max-width: 1100px; margin: 0 auto; padding: 40px 24px 80px; }
+
+  /* HERO */
+  .hero {
+    background: linear-gradient(135deg, rgba(127, 82, 255, 0.18), rgba(51, 112, 255, 0.1));
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 40px 32px;
+    margin-bottom: 32px;
+    position: relative;
+    overflow: hidden;
+  }
+  .hero::before {
+    content: ""; position: absolute; top: -50%; right: -10%;
+    width: 500px; height: 500px;
+    background: radial-gradient(circle, rgba(127, 82, 255, 0.3), transparent 70%);
+    pointer-events: none;
+  }
+  .badge {
+    display: inline-flex; align-items: center; gap: 6px;
+    background: var(--primary-soft);
+    border: 1px solid rgba(127, 82, 255, 0.4);
+    color: var(--primary);
+    padding: 4px 12px; border-radius: 999px;
+    font-size: 12px; font-weight: 600;
+    margin-bottom: 16px; letter-spacing: 0.5px;
+  }
+  .badge .dot { width: 6px; height: 6px; background: var(--primary); border-radius: 50%; }
+  h1 { margin: 0 0 12px; font-size: 32px; line-height: 1.3; position: relative; }
+  .hero .sub { color: var(--muted); font-size: 14px; position: relative; }
+  .hero .sub code { color: var(--cyan); }
+
+  .stats {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+    gap: 12px;
+    margin-top: 20px;
+    position: relative;
+  }
+  .stat {
+    background: rgba(0,0,0,0.25);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px 12px;
+    text-align: center;
+  }
+  .stat .num { font-size: 22px; font-weight: 700; color: var(--primary); }
+  .stat .lbl { font-size: 11px; color: var(--muted); margin-top: 4px; letter-spacing: 0.5px; }
+
+  /* SECTION */
+  section {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 28px 28px 24px;
+    margin-bottom: 24px;
+  }
+  section > h2 {
+    margin: 0 0 8px; font-size: 21px;
+    display: flex; align-items: center; gap: 10px;
+  }
+  .num-badge {
+    display: inline-flex;
+    width: 30px; height: 30px;
+    background: var(--primary);
+    color: white;
+    border-radius: 8px;
+    align-items: center; justify-content: center;
+    font-size: 14px; font-weight: 700;
+  }
+  .num-badge.feishu { background: var(--feishu); }
+  .num-badge.green { background: var(--green); }
+  .num-badge.yellow { background: var(--yellow); }
+  .num-badge.cyan { background: var(--cyan); }
+  section > .lead {
+    color: var(--muted);
+    margin: 0 0 20px;
+    font-size: 14px;
+  }
+
+  /* TASK CARD */
+  .task-card {
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 16px 18px;
+    margin-bottom: 12px;
+    border-left: 3px solid var(--primary);
+  }
+  .task-card.feishu { border-left-color: var(--feishu); }
+  .task-card.green { border-left-color: var(--green); }
+  .task-card.yellow { border-left-color: var(--yellow); }
+  .task-card.red { border-left-color: var(--red); }
+  .task-card.cyan { border-left-color: var(--cyan); }
+
+  .task-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 12px;
+    margin-bottom: 6px;
+  }
+  .task-title {
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--text);
+  }
+  .task-meta {
+    font-size: 11px;
+    color: var(--muted);
+    font-family: "JetBrains Mono", monospace;
+    white-space: nowrap;
+  }
+  .task-body { font-size: 13.5px; color: var(--text); }
+  .task-body ul { margin: 6px 0; padding-left: 22px; }
+  .task-body li { margin-bottom: 4px; }
+  .task-body code { color: var(--cyan); font-size: 12.5px; }
+
+  /* CALLOUT */
+  .callout {
+    border-left: 4px solid var(--primary);
+    background: var(--primary-soft);
+    padding: 14px 18px;
+    border-radius: 0 12px 12px 0;
+    margin: 16px 0;
+    font-size: 14px;
+  }
+  .callout.yellow { border-color: var(--yellow); background: var(--yellow-soft); }
+  .callout.yellow strong { color: var(--yellow); }
+  .callout.green { border-color: var(--green); background: var(--green-soft); }
+  .callout.green strong { color: var(--green); }
+  .callout.red { border-color: var(--red); background: var(--red-soft); }
+  .callout.red strong { color: var(--red); }
+  .callout strong { color: var(--primary); }
+
+  /* TABLE */
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 16px 0;
+    font-size: 13px;
+    background: var(--panel-2);
+    border-radius: 10px;
+    overflow: hidden;
+  }
+  th, td {
+    padding: 10px 14px;
+    text-align: left;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+  }
+  th {
+    background: rgba(127, 82, 255, 0.08);
+    color: var(--primary);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    font-weight: 700;
+  }
+  tr:last-child td { border-bottom: none; }
+  td code { color: var(--cyan); font-size: 12px; word-break: break-all; }
+
+  /* TIMELINE */
+  .timeline {
+    position: relative;
+    padding-left: 28px;
+    margin: 16px 0;
+  }
+  .timeline::before {
+    content: "";
+    position: absolute;
+    left: 8px; top: 4px; bottom: 4px;
+    width: 2px;
+    background: linear-gradient(180deg, var(--feishu), var(--primary), var(--green), var(--cyan));
+  }
+  .tl-item {
+    position: relative;
+    margin-bottom: 16px;
+  }
+  .tl-item::before {
+    content: "";
+    position: absolute;
+    left: -24px; top: 6px;
+    width: 12px; height: 12px;
+    border-radius: 50%;
+    background: var(--panel);
+    border: 2px solid var(--primary);
+  }
+  .tl-item.feishu::before { border-color: var(--feishu); background: var(--feishu); }
+  .tl-item.green::before { border-color: var(--green); background: var(--green); }
+  .tl-item.yellow::before { border-color: var(--yellow); }
+  .tl-item.cyan::before { border-color: var(--cyan); background: var(--cyan); }
+  .tl-time { font-size: 11px; color: var(--muted); font-family: monospace; }
+  .tl-title { font-size: 14px; color: var(--text); font-weight: 600; margin-top: 2px; }
+  .tl-desc { font-size: 13px; color: var(--muted); margin-top: 2px; }
+
+  /* FILE LIST */
+  .file-list {
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 8px 0;
+    margin: 10px 0;
+  }
+  .file-row {
+    display: flex;
+    justify-content: space-between;
+    padding: 8px 16px;
+    font-size: 12.5px;
+    font-family: "JetBrains Mono", monospace;
+    border-bottom: 1px solid var(--border);
+  }
+  .file-row:last-child { border-bottom: none; }
+  .file-row .name { color: var(--cyan); }
+  .file-row .size { color: var(--muted); }
+
+  footer {
+    text-align: center;
+    color: var(--muted);
+    font-size: 12px;
+    padding: 24px;
+    border-top: 1px solid var(--border);
+    margin-top: 32px;
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <!-- HERO -->
+  <div class="hero">
+    <div class="badge"><span class="dot"></span> 周报 · 2026-08-10 ~ 08-16</div>
+    <h1>上周干了这些事</h1>
+    <div class="sub">
+      四条主线：<code>飞书桥开发</code>（20+ commit，最重要）·
+      <code>Kotlin GC 调查</code>（pr342 主题 1-1）·
+      <code>12 Tag 日志体系</code>（深度工作）·
+      <code>HTML 知识卡片</code>（4 份产出）。
+    </div>
+    <div class="stats">
+      <div class="stat"><div class="num">4</div><div class="lbl">主线任务</div></div>
+      <div class="stat"><div class="num">20+</div><div class="lbl">飞书桥 commit</div></div>
+      <div class="stat"><div class="num">7</div><div class="lbl">深度文档</div></div>
+      <div class="stat"><div class="num">4</div><div class="lbl">HTML 卡片</div></div>
+    </div>
+  </div>
+
+  <!-- 1. 飞书桥开发 -->
+  <section>
+    <h2><span class="num-badge feishu">1</span>飞书桥开发（8/11-8/12，最重活）</h2>
+    <p class="lead">约 20 个 commit，覆盖功能新增、Bug 修复、稳定性强化三大方向。</p>
+
+    <div class="task-card feishu">
+      <div class="task-head">
+        <div class="task-title">① 入站文件消息 + 文件回传</div>
+        <div class="task-meta">8/12 a34f404 / 48f8f3b</div>
+      </div>
+      <div class="task-body">
+        <ul>
+          <li>入站文件消息：下载到 <code>tmp/feishu-inbox</code> 后转交 opencode 处理</li>
+          <li><code>/file &lt;path&gt;</code> 命令 + opencode 输出文件自动发飞书</li>
+          <li>fileTransfer 纯函数抽离</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="task-card feishu">
+      <div class="task-head">
+        <div class="task-title">② 视频 URL 自动总结</div>
+        <div class="task-meta">8/12 f29b1a7 / 3d05c42</div>
+      </div>
+      <div class="task-body">
+        <ul>
+          <li>字幕优先 + Whisper fallback + LLM 总结的策略链</li>
+          <li>视频总结功能补齐：时长校验 + 长字幕分块 + 审查报告修复</li>
+          <li>b23.tv URL 识别修复</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="task-card feishu">
+      <div class="task-head">
+        <div class="task-title">③ undici 长任务超时根治</div>
+        <div class="task-meta">8/12 add4228 / 11c01cc / 8ffafec</div>
+      </div>
+      <div class="task-body">
+        <ul>
+          <li>fetchWithRetry 显式设置 undici <code>headersTimeout/bodyTimeout</code></li>
+          <li>真正修复 undici 300s 掐断长任务的问题</li>
+          <li>会话日志改本地时间</li>
+          <li>abort 根因确认：POST 同步阻塞，超时提到 45min 且禁重试</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="task-card feishu">
+      <div class="task-head">
+        <div class="task-title">④ 稳定性强化</div>
+        <div class="task-meta">8/11-8/12 7b4ade8 / c64f590 / 4a554d2 等</div>
+      </div>
+      <div class="task-body">
+        <ul>
+          <li>watchdog 脚本：崩溃自动拉起，launchd 恢复后让位</li>
+          <li>review 修复 54/54 通过（listen errors / kill race / idle / close / fetch listeners）</li>
+          <li>poll-phase 404 触发会话自愈而不重发</li>
+          <li>approval 容忍尾随标点</li>
+          <li>setupGlobalErrorHandler 移到 logger 创建之后，消除 TDZ</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="callout">
+      <strong>关键文件：</strong>
+      <div class="file-list">
+        <div class="file-row"><span class="name">src/feishuBot.mjs</span><span class="size">主入口</span></div>
+        <div class="file-row"><span class="name">src/feishuBotCore.mjs</span><span class="size">核心逻辑</span></div>
+        <div class="file-row"><span class="name">src/fileTransfer.mjs</span><span class="size">文件收发纯函数</span></div>
+        <div class="file-row"><span class="name">src/videoSummary.mjs</span><span class="size">视频总结策略链</span></div>
+        <div class="file-row"><span class="name">scripts/watchdog.sh</span><span class="size">崩溃自愈</span></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 2. Kotlin GC 调查 -->
+  <section>
+    <h2><span class="num-badge green">2</span>Kotlin/Native GC 调查（8/11）</h2>
+    <p class="lead">pr342 主题 1-1 · <code>VisitGlobalRoots</code> no-op 导致 STW root 全丢。</p>
+
+    <div class="task-card green">
+      <div class="task-head">
+        <div class="task-title">主题 1-1：上游 no-op 改动致根集合丢失</div>
+        <div class="task-meta">commit bd0abd533c9</div>
+      </div>
+      <div class="task-body">
+        <ul>
+          <li>根因：上游 <code>33af2848b3c</code> 把 <code>VisitGlobalRoots</code> 改成 no-op，OHOS 分支 STW 路径只调这个函数 → root 集合为空 → 全局对象 + StableRef 被错误回收</li>
+          <li>修复：<code>VisitGlobalRoots</code> 改成 publish + 委托并发路径，让 STW 和并发覆盖同一份 root 集合</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="task-card green">
+      <div class="task-head">
+        <div class="task-title">复现脚本 + 反汇编证据</div>
+        <div class="task-meta">pr342/artifacts + evidence</div>
+      </div>
+      <div class="task-body">
+        <ul>
+          <li><code>run_min_repro.sh</code> / <code>run_path_b_repro_fail.sh</code>：复现脚本</li>
+          <li><code>min_repro_fail.kexe</code> / <code>min_repro_pass.kexe</code>：失败/通过产物</li>
+          <li><code>disasm_visit_global_roots_noop.txt</code> vs <code>_fixed.txt</code>：反汇编对比</li>
+          <li>3 个 FAIL 用例从 0 fails → 3 fails（GlobalRootsStress / StableRefStress / StableRef bench）</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="task-card green">
+      <div class="task-head">
+        <div class="task-title">Kotlin 主仓 merge</div>
+        <div class="task-meta">8/11 a05dc4d085d / 65b37a99981</div>
+      </div>
+      <div class="task-body">
+        <ul>
+          <li><code>!384</code> merge update_toolchain into develop-2.2.21-OH</li>
+          <li><code>!383</code> merge lxy_cpf_crtgctest-no-libcrt-path into develop-2.2.21-OH</li>
+          <li>update llvm toolchain</li>
+          <li>drop vestigial LIBCRT_PATH guard from crtGcTest</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="callout green">
+      <strong>关键文档：</strong>
+      <div class="file-list">
+        <div class="file-row"><span class="name">pr342/notes/topic-1-1-VisitGlobalRoots-noop-STW-root-loss.md</span><span class="size">主题展开</span></div>
+        <div class="file-row"><span class="name">pr342/notes/topic-1-1-repro-cost.md</span><span class="size">复现成本</span></div>
+        <div class="file-row"><span class="name">pr342/README.md</span><span class="size">总览</span></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 3. 12 Tag 日志体系 -->
+  <section>
+    <h2><span class="num-badge yellow">3</span>12 Tag 日志体系（深度工作）</h2>
+    <p class="lead">从源码核对到实测采集到机制体系梳理，五步闭环。</p>
+
+    <div class="task-card yellow">
+      <div class="task-head">
+        <div class="task-title">① 源码级核对（224 处打点）</div>
+        <div class="task-meta">runtime-日志tag-源码.md</div>
+      </div>
+      <div class="task-body">
+        把 224 处打点与源码逐条核对，修正 4 处实质错误：
+        <ul>
+          <li>路径系统性漏 <code>src/</code> 前缀</li>
+          <li>Alloc 54→53</li>
+          <li>MemoryDump 38→37</li>
+          <li>GC 漏补 <code>CRTAllocator.cpp:44</code></li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="task-card yellow">
+      <div class="task-head">
+        <div class="task-title">② 实测采集两轮（cms + cmc）</div>
+        <div class="task-meta">taglogs/raw_cms/ + raw_cmc/</div>
+      </div>
+      <div class="task-body">
+        <ul>
+          <li><strong>cms 轮</strong>：6.7GB / 1.09 亿行，12 tag 全 Debug，11 个 tag 有数据</li>
+          <li><strong>cmc 轮</strong>：4887 行，仅 4 个 tag 有数据（gc/tls/memoryDump/logging）</li>
+          <li>awk 单遍提取方案解决 grep 多次扫描超时问题</li>
+          <li>12 个 sample_*.txt 齐全，按 tag 切分压缩归档</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="task-card yellow">
+      <div class="task-head">
+        <div class="task-title">③ 功能核对 + 难拿清单</div>
+        <div class="task-meta">tag日志实测-功能核对.md</div>
+      </div>
+      <div class="task-body">
+        <ul>
+          <li>12 tag × 功能声明逐条实测对照（完整/部分/未触发/组合专属）</li>
+          <li>关键实证：MM 74:74 严格成对、Pause 23:23 成对、GCMark 3221 万入队/出队</li>
+          <li>TLS 查找需 pr363 类用例触发（<code>crt_nullable_global_root_race</code>，各 10046 行）</li>
+          <li>难拿清单分四类：用例没到/平台锁死/边缘路径/组合专属</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="task-card yellow">
+      <div class="task-head">
+        <div class="task-title">④ 机制体系梳理</div>
+        <div class="task-meta">§3.5 矩阵 + §3.6 必要性分析</div>
+      </div>
+      <div class="task-body">
+        <ul>
+          <li>12 tag × 5 GC 组合可观测性矩阵（cms/cmc 实测，pmcs/stwms/noop 按源码推断）</li>
+          <li>CMC 7 个无输出 tag 必要性分析：3 合理替代 + 3 真实缺口 + 1 待定</li>
+          <li>发现 third-party/common-rt 子模块独立日志系统（14 个 Component + libcrt_log，约 470 处调用点）</li>
+          <li>确认 Kotlin 当前未调用 common-rt 日志</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="callout yellow">
+      <strong>关键文档（7 份）：</strong>
+      <div class="file-list">
+        <div class="file-row"><span class="name">runtime-日志tag-源码.md</span><span class="size">224 处打点清单（已修正）</span></div>
+        <div class="file-row"><span class="name">tag日志实测-功能核对.md</span><span class="size">实测核对 + §3.5 矩阵 + §3.6 必要性</span></div>
+        <div class="file-row"><span class="name">CRT-CMC日志机制清单.md</span><span class="size">CRT/CMC 视角 12-tag 现状</span></div>
+        <div class="file-row"><span class="name">common-rt日志系统-详细.md</span><span class="size">子模块独立日志系统全解</span></div>
+        <div class="file-row"><span class="name">未闭环/common-rt日志采集计划.md</span><span class="size">后续计划</span></div>
+        <div class="file-row"><span class="name">未闭环/RT-采集闭环结论与后续规划.md</span><span class="size">RT 待设备补采</span></div>
+        <div class="file-row"><span class="name">OK/plan-日志解析.md</span><span class="size">已闭环</span></div>
+      </div>
+    </div>
+
+    <div class="callout red">
+      <strong>唯一未覆盖：</strong>RT 的 OHOS 设备实测（macOS 上 17/18 处打点 <code>#ifdef KONAN_OHOS</code> 不触发）。
+    </div>
+  </section>
+
+  <!-- 4. HTML 知识卡片产出 -->
+  <section>
+    <h2><span class="num-badge cyan">4</span>HTML 知识卡片产出（8/14）</h2>
+    <p class="lead">把技术文档转成图文并茂的单文件 HTML，4 份产出共 ~120KB。</p>
+
+    <div class="file-list">
+      <div class="file-row">
+        <span class="name">topic-1-1-card.html</span>
+        <span class="size">33.9 KB · 8/11 20:33 · 3 SVG 图解 + 提交链时间线</span>
+      </div>
+      <div class="file-row">
+        <span class="name">stackmap-card.html</span>
+        <span class="size">42.5 KB · 8/12 18:10 · 5 SVG 图解 + 4 bug 卡片</span>
+      </div>
+      <div class="file-row">
+        <span class="name">opencode-work-summary.html</span>
+        <span class="size">~22 KB · 8/14 · 5 项任务 + 时间线 + 阻塞项</span>
+      </div>
+      <div class="file-row">
+        <span class="name">feishu-bridge-intro.html</span>
+        <span class="size">~24 KB · 8/14 · 10 节 + 架构图 + 排错速查</span>
+      </div>
+    </div>
+
+    <div class="callout">
+      <strong>特点：</strong>所有 HTML 单文件自包含（内联 CSS + SVG + 代码高亮），无外部依赖，<code>open</code> 即可在浏览器查看。
+    </div>
+  </section>
+
+  <!-- 5. 用例仓库 -->
+  <section>
+    <h2><span class="num-badge">5</span>用例仓库推进（pr371 / pr379）</h2>
+    <p class="lead">KN-performance-testcases 下的 PR 验证。</p>
+
+    <div class="task-card">
+      <div class="task-head">
+        <div class="task-title">pr371 · 阶段 0 + 阶段 1</div>
+        <div class="task-meta">z_pr/pr371/</div>
+      </div>
+      <div class="task-body">
+        <ul>
+          <li>阶段 0 编译 + 阶段 1 编译、产物校验完成</li>
+          <li><code>阶段1-spec.md</code> + <code>执行计划.md</code> + <code>测试准备.md</code> 文档齐</li>
+          <li><code>stage1-build.sh</code> 脚本就绪</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="task-card">
+      <div class="task-head">
+        <div class="task-title">pr379 · 测试准备</div>
+        <div class="task-meta">z_pr/pr379/测试准备.md</div>
+      </div>
+      <div class="task-body">
+        测试准备文档产出，等待后续执行。
+      </div>
+    </div>
+  </section>
+
+  <!-- 6. 时间线总览 -->
+  <section>
+    <h2><span class="num-badge">6</span>周时间线</h2>
+    <p class="lead">按日期串起所有产出。</p>
+
+    <div class="timeline">
+      <div class="tl-item feishu">
+        <div class="tl-time">8/10（周日）</div>
+        <div class="tl-title">飞书桥端到端验证通过</div>
+        <div class="tl-desc">真实飞书端到端：飞书发指令 → 🔐 审批 → 回复"允许" → 文件落盘 + 结果回传</div>
+      </div>
+      <div class="tl-item feishu">
+        <div class="tl-time">8/11（周一）</div>
+        <div class="tl-title">飞书桥稳定性修复 + Kotlin GC merge</div>
+        <div class="tl-desc">9 个稳定性 commit（review findings / poll-phase 自愈 / approval 容错）+ Kotlin 主仓 merge !383 !384</div>
+      </div>
+      <div class="tl-item cyan">
+        <div class="tl-time">8/11 晚上</div>
+        <div class="tl-title">topic-1-1-card.html 产出</div>
+        <div class="tl-desc">从 z-develop 文档转 HTML 知识卡片</div>
+      </div>
+      <div class="tl-item feishu">
+        <div class="tl-time">8/12（周二）</div>
+        <div class="tl-title">飞书桥功能补齐（11 个 commit）</div>
+        <div class="tl-desc">文件收发 + 视频总结 + undici 超时根治 + watchdog</div>
+      </div>
+      <div class="tl-item cyan">
+        <div class="tl-time">8/12 晚上</div>
+        <div class="tl-title">stackmap-card.html 产出</div>
+        <div class="tl-desc">260 行 Markdown → 9 节 HTML + 5 SVG</div>
+      </div>
+      <div class="tl-item yellow">
+        <div class="tl-time">8/13-8/14</div>
+        <div class="tl-title">12 Tag 日志体系深度工作</div>
+        <div class="tl-desc">224 处打点核对 + 两轮实测 + §3.5 矩阵 + §3.6 必要性分析</div>
+      </div>
+      <div class="tl-item cyan">
+        <div class="tl-time">8/14（周四）</div>
+        <div class="tl-title">2 份 HTML 产出</div>
+        <div class="tl-desc">opencode-work-summary.html + feishu-bridge-intro.html</div>
+      </div>
+      <div class="tl-item green">
+        <div class="tl-time">8/15-8/16</div>
+        <div class="tl-title">pr371 / pr379 用例推进</div>
+        <div class="tl-desc">pr371 阶段 0/1 完成 + pr379 测试准备</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 7. 数据总结 -->
+  <section>
+    <h2><span class="num-badge">7</span>一周数据</h2>
+    <p class="lead">量化总结。</p>
+
+    <table>
+      <thead>
+        <tr>
+          <th>维度</th>
+          <th>数据</th>
+          <th>说明</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>飞书桥 commit</td>
+          <td><strong style="color:var(--feishu)">20+</strong></td>
+          <td>8/11-8/12 两天，功能 + 修复 + 稳定性</td>
+        </tr>
+        <tr>
+          <td>Kotlin 主仓 merge</td>
+          <td><strong style="color:var(--green)">2</strong></td>
+          <td>!383 + !384（toolchain + crtgc test）</td>
+        </tr>
+        <tr>
+          <td>GC 调查文档</td>
+          <td><strong style="color:var(--green)">2</strong></td>
+          <td>主题 1-1 展开 + 复现成本</td>
+        </tr>
+        <tr>
+          <td>日志体系文档</td>
+          <td><strong style="color:var(--yellow)">7</strong></td>
+          <td>224 打点 + 实测核对 + CRT-CMC + common-rt + 计划</td>
+        </tr>
+        <tr>
+          <td>HTML 知识卡片</td>
+          <td><strong style="color:var(--cyan)">4</strong></td>
+          <td>~120KB，单文件自包含</td>
+        </tr>
+        <tr>
+          <td>实测数据采集</td>
+          <td><strong>1.09 亿行</strong></td>
+          <td>cms 轮 6.7GB + cmc 轮 4887 行</td>
+        </tr>
+        <tr>
+          <td>用例 PR</td>
+          <td><strong>2</strong></td>
+          <td>pr371 阶段 0/1 + pr379 测试准备</td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <!-- 8. 待办 -->
+  <section>
+    <h2><span class="num-badge">8</span>下周 / 待办</h2>
+    <p class="lead">未闭环的事项。</p>
+
+    <div class="callout yellow">
+      <strong>1. RT 的 OHOS 设备实测</strong><br/>
+      12 Tag 体系唯一未覆盖的部分，macOS 上 17/18 处 <code>#ifdef KONAN_OHOS</code> 不触发，需设备采集。
+    </div>
+
+    <div class="callout yellow">
+      <strong>2. common-rt 日志桥接</strong><br/>
+      已发现 third-party/common-rt 有独立日志系统（14 个 Component + libcrt_log，约 470 处调用点），Kotlin 当前未调用。
+      是否要桥接到 12-tag 通道，待定。
+    </div>
+
+    <div class="callout yellow">
+      <strong>3. pr379 执行</strong><br/>
+      测试准备已完成，等待执行。
+    </div>
+
+    <div class="callout red">
+      <strong>4. 飞书 App 文件上传权限</strong><br/>
+      App <code>cli_aaf3f9f709b91be4</code> 缺 <code>im:resource:upload</code> 权限，<code>send-file.mjs</code> 已就绪待权限开通后重跑。
+    </div>
+  </section>
+
+  <footer>
+    周报 · 2026-08-10 ~ 08-16 · 基于文件系统 / git log 实际产出整理
+  </footer>
+</div>
+</body>
+</html>

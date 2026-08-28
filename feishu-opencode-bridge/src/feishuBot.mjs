@@ -98,7 +98,8 @@ if (import.meta.url === `file://${process.argv[1]}`) {
       const uploadResp = await client.im.file.create({
         data: { file_type: "stream", file_name: fileName, file: fileBuf },
       });
-      const fileKey = uploadResp?.data?.file_key;
+      // SDK 实际返回顶层 file_key,不是嵌在 .data 里(与 message.create 不同)
+      const fileKey = uploadResp?.file_key || uploadResp?.data?.file_key;
       if (!fileKey) {
         logger.error("feishuBot", "文件上传失败", uploadResp);
         await sendToFeishu(chatId, `❌ 文件上传失败:${JSON.stringify(uploadResp).slice(0, 200)}`);
@@ -132,8 +133,16 @@ if (import.meta.url === `file://${process.argv[1]}`) {
       path: { message_id: messageId, file_key: fileKey },
       params: { type: "file" },
     });
-    const src = resp?.data ?? resp;
-    await pipeline(src, createWriteStream(absPath));
+    // SDK 返回 { writeFile(filePath), getReadableStream(), headers },不是流本身。
+    // 旧代码 `resp?.data ?? resp` 把整个对象当源传给 pipeline,触发:
+    //   The "body" argument must be of type ... Received an instance of Object
+    if (typeof resp?.writeFile === "function") {
+      await resp.writeFile(absPath);
+    } else if (typeof resp?.getReadableStream === "function") {
+      await pipeline(resp.getReadableStream(), createWriteStream(absPath));
+    } else {
+      throw new Error(`下载响应格式异常,既无 writeFile 也无 getReadableStream: ${typeof resp}`);
+    }
     logger.info("feishuBot", `已下载入站文件: ${absPath}`);
     return absPath;
   }
@@ -247,6 +256,27 @@ if (import.meta.url === `file://${process.argv[1]}`) {
       "feishuBot",
       `授权用户: ${allowedUsers.length ? allowedUsers.join(", ") : "(未配置，将拒绝所有用户)"}`
     );
+
+    const PROBE_INTERVAL_MS = Number(process.env.FEISHU_PROBE_INTERVAL_MS || 60 * 60 * 1000);
+    const probe = setInterval(async () => {
+      try {
+        const r = await client.request({
+          method: "GET",
+          url: "/open-apis/bot/v3/info/",
+          timeout: 10000,
+        });
+        if (r?.data) {
+          logger.info("feishuBot", `探活成功 (bot=${r.data.bot_name ?? r.data.app_name ?? "?"})`);
+        } else {
+          throw new Error(`探活响应异常: ${JSON.stringify(r).slice(0, 200)}`);
+        }
+      } catch (err) {
+        logger.error("feishuBot", `探活失败，退出以触发 launchd 重启: ${err?.message ?? err}`);
+        process.exit(1);
+      }
+    }, PROBE_INTERVAL_MS);
+    probe.unref();
+    logger.info("feishuBot", `探活看门狗已启动，间隔 ${PROBE_INTERVAL_MS / 1000}s`);
   }
 
   main().catch((err) => {
