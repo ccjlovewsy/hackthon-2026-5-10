@@ -265,8 +265,10 @@ if (import.meta.url === `file://${process.argv[1]}`) {
           url: "/open-apis/bot/v3/info/",
           timeout: 10000,
         });
-        if (r?.data) {
-          logger.info("feishuBot", `探活成功 (bot=${r.data.bot_name ?? r.data.app_name ?? "?"})`);
+        // bot/v3/info 的返回体是 {"code":0,"msg":"...","bot":{...}}，信息挂在顶层 bot 键而非 data
+        const bot = r?.bot ?? r?.data?.bot ?? r?.data;
+        if (bot) {
+          logger.info("feishuBot", `探活成功 (bot=${bot.app_name ?? bot.bot_name ?? "?"})`);
         } else {
           throw new Error(`探活响应异常: ${JSON.stringify(r).slice(0, 200)}`);
         }

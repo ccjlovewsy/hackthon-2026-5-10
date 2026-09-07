@@ -203,6 +203,8 @@ plist 文件：`~/Library/LaunchAgents/com.hackthon.feishu-opencode-bridge.plist
 - 断连后最多 1 个探活间隔恢复（默认 1 小时）；正常 idle 不受影响
 - 性能开销：每小时一个 HTTP 请求，可忽略
 
+**踩过的坑（2026-09-07 修复）**：`GET /bot/v3/info/` 的返回体把机器人信息挂在顶层 `bot` 键（`{"bot":{"activate_status":2,"app_name":"robot",...}}`），不是常见的 `data` 键；且 `activate_status` 枚举中 **2 = 已启用（正常）**。最初实现误判 `r?.data`，导致探活 100% 误报、每小时自杀重启一次。判断条件已改为读取 `r.bot`。
+
 ---
 
 ## 六、从普通 opencode CLI 给飞书推消息
