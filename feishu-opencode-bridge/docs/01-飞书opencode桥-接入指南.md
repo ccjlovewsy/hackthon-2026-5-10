@@ -68,9 +68,12 @@ FEISHU_APP_SECRET=你的AppSecret    # 应用详情→凭证与基础信息，�
 OPENCODE_DIR=/Users/issuser/code   # opencode 干活的工作目录，按需改
 OPENCODE_ALLOWED_USERS=            # 先留空，第三步会填
 # OPENCODE_SERVE_PORT=41234        # 可选：opencode serve 端口（默认 41234，冲突时改）
+# OPENCODE_MODEL=volcano/glm-5.2   # 可选：固定指令使用的模型（provider/model）
 ```
 
 > 找不到文件就复制 `.env.example` 改名 `.env`。
+>
+> `OPENCODE_MODEL` 格式为 `provider/model`（如 `volcano/glm-5.2`，modelID 自身可含 `/`）。不设时桥在首次指令前自动取 `GET /config` 的默认模型并缓存；取不到则不携带 model，保持原有行为。
 
 ### 7. 启动桥
 
@@ -412,6 +415,8 @@ launchd 把桥当**典型用户级常驻 daemon** 管理：开机自启、崩溃
 | 回复了「允许」但没反应 | 审批请求可能已过期（会话被 abort）；查看桥日志的 `权限回复失败`，或重发指令 |
 | 机器人回「⏱️ 执行超时」 | 任务跑太久（默认 45 分钟兜底），或权限一直没人批导致挂起；检查是否有未处理的 🔐 审批消息 |
 | 回复被截断 | 回复超 4000 字符会截断并标注，属预期 |
+| 机器人**立刻**回「助手消息为空（provider 未返回内容，常见原因：鉴权失败/模型不可用）」（不再空等 45 分钟） | opencode serve 进程环境缺 `VOLCANO_API_KEY`（config 用 `{env:VOLCANO_API_KEY}`，launchd 拿不到交互终端的 shell 变量）：serve 日志 `<OPENCODE_DATA_DIR>/opencode/log/opencode.log` 里是 `AI_APICallError: Unauthorized`，HTTP 仍是 200、assistant 消息无内容。处理：把 `VOLCANO_API_KEY` 写进桥的 `.env`（已被 .gitignore 忽略）后重启桥 |
+| 机器人回「❌ 处理失败：fetchWithRetry: HTTP 500 … UnknownError … ref=err_xxx」 | 多为**会话里存的 model id 已失效**（如配置键改名）。到 `<OPENCODE_DATA_DIR>/opencode/log/opencode.log`（未设 `OPENCODE_DATA_DIR` 则为 `~/.local/share/opencode/log/opencode.log`）grep 同名 ref 看真实原因，典型 `ProviderModelNotFoundError: Model not found: volcano/GLM 5.2`。桥现已按 `OPENCODE_MODEL` / `GET /config` 固定模型，老会话可继续用；仍失败再发 `/kill` 重建会话 |
 
 ---
 

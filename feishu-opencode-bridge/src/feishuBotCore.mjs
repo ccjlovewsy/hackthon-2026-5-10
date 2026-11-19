@@ -11,6 +11,7 @@
  */
 import { spawn } from "node:child_process";
 import { appendFileSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fetchWithRetry } from "./fetchWithRetry.mjs";
 import { formatErr } from "./errors.mjs";
@@ -55,7 +56,7 @@ export function extractMessageText(message) {
       .replace(/[ \t]{2,}/g, " ")
       .trim();
   }
-  return text;
+  return text.trim();
 }
 
 /**
@@ -144,10 +145,11 @@ export function parseApprovalReply(text) {
 }
 
 /** 把权限请求转成飞书审查消息文案。 */
-export function formatPermissionAsk(req, index, total) {
+export function formatPermissionAsk(req, index, total, { backendLabel = "opencode", allowAlways = true } = {}) {
   const { permission, patterns, metadata } = req;
-  const lines = [`🔐 opencode 请求授权（${index + 1}/${total}）`];
+  const lines = [`🔐 ${backendLabel} 请求授权（${index + 1}/${total}）`];
   lines.push(`操作：${permission}`);
+  if (backendLabel !== "opencode" && metadata?.title) lines.push(`标题：${metadata.title}`);
   if (patterns?.length) lines.push(`范围：${patterns.join("、")}`);
   const filepath = metadata?.filepath;
   if (filepath) lines.push(`文件：${filepath}`);
@@ -156,7 +158,11 @@ export function formatPermissionAsk(req, index, total) {
     const diff = String(metadata.diff);
     lines.push(`修改内容：\n${diff.length > 1500 ? diff.slice(0, 1500) + "\n…(已截断)" : diff}`);
   }
-  lines.push(`回复「允许」继续，「拒绝」中止，「总是允许」本次会话后自动放行${total > 1 ? `（也可「允许 ${index + 1}」指定）` : ""}`);
+  if (allowAlways) {
+    lines.push(`回复「允许」继续，「拒绝」中止，「总是允许」本次会话后自动放行${total > 1 ? `（也可「允许 ${index + 1}」指定）` : ""}`);
+  } else {
+    lines.push(`回复「允许」继续，「拒绝」中止（${backendLabel} 后端暂只支持单次允许）${total > 1 ? `（也可「允许 ${index + 1}」指定）` : ""}`);
+  }
   return lines.join("\n");
 }
 
@@ -171,6 +177,7 @@ export function formatPermissionAsk(req, index, total) {
  * @param {string} opts.cwd serve 工作目录
  * @param {(req: {id:string, sessionID:string, permission:string, patterns:string[], metadata:object}) => void} opts.onPermissionAsked
  * @param {(line: string) => void} [opts.log]
+ * @param {(line: string) => void} [opts.warn] warn 级日志（模型固定等可降级问题）
  */
 export function createOpenCodeServer(opts) {
   const {
@@ -180,11 +187,128 @@ export function createOpenCodeServer(opts) {
     cwd,
     onPermissionAsked,
     log = (m) => console.log(`[opencode-serve] ${m}`),
+    warn = (m) => console.log(`[opencode-serve] [warn] ${m}`),
   } = opts;
   const base = `http://127.0.0.1:${port}`;
   let child = null;
   let eventCtrl = null;
   let stopped = false;
+
+  // message POST 的 model pinning：
+  // 会话 DB 里存的 model id 可能已失效（配置键改名），导致 serve 抛 ProviderModelNotFoundError
+  // 并被 HTTP 层 mask 成 500。POST 显式带 model 可覆盖会话里存的旧值。
+  // OPENCODE_MODEL 优先；未设时惰性 GET /config 取默认模型，成功解析后进程内缓存。
+  let configModel = null;
+  let configModelPromise;
+  let configModelWarned = false;
+  let invalidEnvModelWarned = false;
+
+  /** 按第一个 `/` 切分 provider/model（modelID 自身可能含 `/`）。 */
+  function parseModelRef(raw) {
+    const s = String(raw ?? "").trim();
+    const i = s.indexOf("/");
+    if (i <= 0 || i === s.length - 1) return null;
+    const providerID = s.slice(0, i).trim();
+    const modelID = s.slice(i + 1).trim();
+    return providerID && modelID ? { providerID, modelID } : null;
+  }
+
+  /** serve 日志路径提示：OPENCODE_DATA_DIR 优先，否则默认 XDG data dir。 */
+  function serveLogPath() {
+    const root = process.env.OPENCODE_DATA_DIR || dataDir;
+    return root
+      ? join(root, "opencode/log/opencode.log")
+      : join(homedir(), ".local/share/opencode/log/opencode.log");
+  }
+
+  async function loadConfigModel() {
+    try {
+      const r = await fetchWithRetry(`${base}/config`, { timeoutMs: 5000, retries: 0 });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const j = await r.json();
+      const parsed = parseModelRef(j?.model);
+      if (!parsed) throw new Error(`model 字段缺失或格式非法: ${JSON.stringify(j?.model)}`);
+      log(`使用 /config 默认模型: ${parsed.providerID}/${parsed.modelID}`);
+      return parsed;
+    } catch (err) {
+      if (!configModelWarned) {
+        configModelWarned = true;
+        warn(
+          `未设置 OPENCODE_MODEL 且无法从 GET /config 解析默认模型（${err?.message ?? err}）；本次 message 请求不携带 model，后续指令会重试`
+        );
+      }
+      return null;
+    }
+  }
+
+  function resolveModel() {
+    const envModel = String(process.env.OPENCODE_MODEL ?? "").trim();
+    if (envModel) {
+      const parsed = parseModelRef(envModel);
+      if (parsed) return Promise.resolve(parsed);
+      if (!invalidEnvModelWarned) {
+        invalidEnvModelWarned = true;
+        warn(`OPENCODE_MODEL 格式非法（应为 provider/model）: ${envModel}；message 请求将不携带 model`);
+      }
+      return Promise.resolve(null);
+    }
+    if (configModel) return Promise.resolve(configModel);
+    if (!configModelPromise) {
+      configModelPromise = loadConfigModel()
+        .then((parsed) => {
+          if (parsed) configModel = parsed;
+          return parsed;
+        })
+        .finally(() => {
+          configModelPromise = undefined; // 失败不缓存: 下次指令重试 /config
+        });
+    }
+    return configModelPromise;
+  }
+
+  /** 把 assistant 消息上的 error 字段转成可读文本（字符串直取；对象优先 message；兜底 JSON 截断）。 */
+  function formatAssistantError(error) {
+    if (typeof error === "string") return error;
+    if (error && typeof error === "object") {
+      const msg = error.message ?? error.data?.message;
+      if (typeof msg === "string" && msg.trim()) return msg;
+      try {
+        const s = JSON.stringify(error);
+        return s.length > 500 ? `${s.slice(0, 500)}…` : s;
+      } catch {
+        return String(error);
+      }
+    }
+    return String(error);
+  }
+
+  /** 从 fetchWithRetry 的 5xx 异常 message 尾部取回原始响应体（fetchWithRetry 已截断 500 字符）。 */
+  function bodyFromRetryError(err) {
+    const m = /^fetchWithRetry: HTTP \d{3} after \d+ attempts(?:: ([\s\S]*))?$/.exec(
+      String(err?.message ?? "")
+    );
+    return m?.[1] ?? "";
+  }
+
+  /** 把 masked 5xx 变成可定位报错：ref 原文 + serve 日志路径 + 原响应体片段。 */
+  function buildMessagePostError(status, body, cause) {
+    let ref = null;
+    try {
+      const j = JSON.parse(body);
+      if (typeof j?.data?.ref === "string") ref = j.data.ref;
+    } catch {
+      /* body 非 JSON，忽略 */
+    }
+    const snippet = body.length > 500 ? `${body.slice(0, 500)}…` : body;
+    const details = [];
+    if (ref) details.push(`ref=${ref}`);
+    details.push(`serve 日志: ${serveLogPath()}（grep 该 ref 查看真实原因）`);
+    if (snippet) details.push(`响应体: ${snippet}`);
+    const err = new Error(`发送指令失败: HTTP ${status}；${details.join("；")}`);
+    err.statusCode = status;
+    if (cause) err.cause = cause;
+    return err;
+  }
 
   async function healthOk() {
     try {
@@ -308,15 +432,28 @@ export function createOpenCodeServer(opts) {
                                 // 过短会在任务执行中途把半截输出误返回;idle 只是 step-finish 丢失时的兜底
     pollMs = 1000,
   } = {}) {
-    const r = await fetchWithRetry(`${base}/session/${sessionID}/message`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ parts: [{ type: "text", text }] }),
-      timeoutMs: POST_MESSAGE_TIMEOUT_MS, // 同步阻塞(实测),须覆盖完整指令执行窗口;retries=0 防重复执行
-      retries: POST_MESSAGE_RETRIES,
-    });
+    const postBody = { parts: [{ type: "text", text }] };
+    const model = await resolveModel();
+    if (model) postBody.model = model;
+
+    let r;
+    try {
+      r = await fetchWithRetry(`${base}/session/${sessionID}/message`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(postBody),
+        timeoutMs: POST_MESSAGE_TIMEOUT_MS, // 同步阻塞(实测),须覆盖完整指令执行窗口;retries=0 防重复执行
+        retries: POST_MESSAGE_RETRIES,
+      });
+    } catch (err) {
+      // 5xx 已被 fetchWithRetry 转成异常；补上 ref/日志路径/响应体，便于定位 masked UnknownError
+      if (err?.statusCode >= 500) throw buildMessagePostError(err.statusCode, bodyFromRetryError(err), err);
+      throw err;
+    }
     if (!r.ok) {
-      const err = new Error(`发送指令失败: ${r.status} ${(await r.text()).slice(0, 300)}`);
+      const body = (await r.text()).slice(0, 500);
+      if (r.status >= 500) throw buildMessagePostError(r.status, body);
+      const err = new Error(`发送指令失败: ${r.status} ${body.slice(0, 300)}`);
       err.statusCode = r.status; // 挂上状态码,isSessionNotFound 优先按 status===404 判定,不依赖 body 文本
       throw err;
     }
@@ -342,6 +479,26 @@ export function createOpenCodeServer(opts) {
           const messages = Array.isArray(list) ? list : list?.data ?? [];
           const target = messages.find((m) => (m?.info?.id ?? m?.id) === assistantID);
           const parts = target?.parts ?? [];
+          // 终止/异常态快速失败：provider 鉴权失败等场景 serve 仍回 200 并创建 assistant 消息，
+          // 但消息没有 parts、time.completed 已置位，真实错误只写在 serve 日志里。
+          // 必须在轮询周期内抛错，不能空转到 timeoutMs（默认 45 分钟）。
+          if (target?.info?.error != null) {
+            const err = new Error(`助手消息报错: ${formatAssistantError(target.info.error)}`);
+            err.fastFail = true; // 穿透下方 catch（非 404 的普通错误会被当作网络抖动重试）
+            throw err;
+          }
+          if (target?.info?.finish === "error") {
+            const err = new Error("助手消息报错: finish=error");
+            err.fastFail = true;
+            throw err;
+          }
+          if (parts.length === 0 && typeof target?.info?.time?.completed === "number") {
+            const err = new Error(
+              "助手消息为空（provider 未返回内容，常见原因：鉴权失败/模型不可用）；请查 serve 日志定位真实原因"
+            );
+            err.fastFail = true;
+            throw err;
+          }
           const currentText = JSON.stringify(parts);
           if (parts.some((p) => p.type === "step-finish")) {
             return parts
@@ -371,6 +528,8 @@ export function createOpenCodeServer(opts) {
       } catch (err) {
         // 轮询 404 = 会话失效信号,必须穿透让外层自愈接管,不能当瞬时错误吞掉
         if (err?.statusCode === 404 || err?.status === 404) throw err;
+        // 助手消息终止/异常态同样是最终结果,不能被当作网络抖动继续轮询
+        if (err?.fastFail) throw err;
         /* 其他失败(网络抖动等)重试 */
       }
       await new Promise((res) => setTimeout(res, pollMs));
@@ -390,13 +549,16 @@ export function createOpenCodeServer(opts) {
     if (!r.ok) throw new Error(`权限回复失败: ${r.status} ${(await r.text()).slice(0, 300)}`);
   }
 
+  /** opencode 的本地会话重置由 core 负责，无需额外关闭 serve 会话。 */
+  async function resetSession() {}
+
   function close() {
     stopped = true; // 停掉 startEventLoop 的重连循环,避免 close 后悬挂重连
     eventCtrl?.abort();
     if (child && !child.killed) child.kill("SIGTERM");
   }
 
-  const server = { ensure, startEventLoop, createSession, sendMessage, replyPermission, close, onPermissionAsked, onSseReconnect: null };
+  const server = { ensure, startEventLoop, createSession, sendMessage, resetSession, replyPermission, close, onPermissionAsked, onSseReconnect: null };
   return server;
 }
 
@@ -492,7 +654,10 @@ export function createFeishuBotCore(opts) {
     pendingRequests.set(req.id, { chatId, req, askedAt: Date.now() });
     const pending = [...pendingRequests.values()].filter((p) => p.chatId === chatId);
     const idx = pending.findIndex((p) => p.req.id === req.id);
-    const text = formatPermissionAsk(req, idx, pending.length);
+    const text = formatPermissionAsk(req, idx, pending.length, {
+      backendLabel: server.backendLabel ?? "opencode",
+      allowAlways: server.capabilities?.allowAlways !== false,
+    });
     log(`权限请求 ${req.id} → 飞书 ${chatId}`);
     sendPermissionAsk?.(chatId, text, req.id);
   };
@@ -560,14 +725,17 @@ export function createFeishuBotCore(opts) {
         }
       }
     } catch (err) {
+      log(`指令失败 (session ${sessionID}): ${formatErr(err)}`);
       sessionLog?.append(chatId, `ERROR: ${formatErr(err)}`);
       metrics.messagesFailed++;
       throw err;
     }
     const replyText = (outText?.trim() || "(无输出)");
     const finalText = replyText.length > 4000 ? `${replyText.slice(0, 4000)}\n…(已截断)` : replyText;
+    if ((chatGen.get(chatId) ?? 0) !== gen) return finalText;
     sessionLog?.append(chatId, `ASSISTANT: ${finalText.slice(0, 500)}`);
     await reply?.(chatId, finalText);
+    if ((chatGen.get(chatId) ?? 0) !== gen) return finalText;
     metrics.messagesReplied++;
     if (sendFile) {
       const refs = extractFileReferences(outText, rootDir);
@@ -668,6 +836,11 @@ export function createFeishuBotCore(opts) {
       queues.delete(chatId);
       // 代次 +1:旧队列任务若此时触发 404 自愈,代次校验失败,不会把新 sessionID 写回映射
       chatGen.set(chatId, (chatGen.get(chatId) ?? 0) + 1);
+      // 后端 resetSession 会取消权限请求；core 也必须清除，否则后续「允许」会答复已失效请求
+      for (const [requestId, pending] of pendingRequests) {
+        if (pending.chatId === chatId) pendingRequests.delete(requestId);
+      }
+      if (oldSession) await server.resetSession?.(oldSession);
       const killText = `🔪 已强制重置会话${oldSession ? `(原 ${oldSession.slice(0, 8)}…)` : ""}。下次指令将创建新会话。`;
       await reply?.(chatId, killText);
       return killText;
@@ -778,13 +951,19 @@ export function createFeishuBotCore(opts) {
         return info;
       }
       const target = chatPending[Math.min(parsed.index ?? chatPending.length - 1, chatPending.length - 1)];
+      if (parsed.reply === "always" && server.capabilities?.allowAlways === false) {
+        const downgrade = `${server.backendLabel ?? "DSH"} 后端暂只支持单次允许，请回复「允许」或「拒绝」。`;
+        await reply?.(chatId, downgrade);
+        return downgrade;
+      }
       pendingRequests.delete(target.req.id);
       log(`用户回复「${text}」→ ${target.req.id} ${parsed.reply}`);
       try {
         await server.replyPermission(target.req.id, parsed.reply);
         if (parsed.reply === "reject") metrics.permissionsRejected++;
         else metrics.permissionsApproved++;
-        const done = parsed.reply === "reject" ? "已拒绝，opencode 已中止该操作。" : parsed.reply === "always" ? "已允许（本次会话内同范围操作自动放行）。" : "已允许，opencode 继续执行。";
+        const backendLabel = server.backendLabel ?? "opencode";
+        const done = parsed.reply === "reject" ? `已拒绝，${backendLabel} 已中止该操作。` : parsed.reply === "always" ? "已允许（本次会话内同范围操作自动放行）。" : `已允许，${backendLabel} 继续执行。`;
         const replyText = `✅ ${done}`;
         await reply?.(chatId, replyText);
         return replyText;

@@ -87,6 +87,19 @@ test("fetchWithRetry: 5xx 触发重试,4xx 不重试", async () => {
   }
 });
 
+test("fetchWithRetry: 5xx 耗尽时保留响应体与状态码", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response('{"error":"session is busy"}', { status: 500 });
+  try {
+    await assert.rejects(
+      fetchWithRetry("http://x", { retries: 0 }),
+      (err) => err.statusCode === 500 && err.message.includes("session is busy")
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("fetchWithRetry: timeoutMs=0 不超时(供 SSE 长连接)", async () => {
   let calls = 0;
   const fakeFetch = async (url, opts) => {

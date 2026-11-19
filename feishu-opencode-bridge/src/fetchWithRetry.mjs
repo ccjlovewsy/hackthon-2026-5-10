@@ -57,7 +57,12 @@ export async function fetchWithRetry(url, options = {}) {
           await sleep(retryDelayMs * Math.pow(2, attempt));
           continue;
         }
-        throw new Error(`fetchWithRetry: HTTP ${res.status} after ${retries + 1} attempts`);
+        const body = (await res.text().catch(() => "")).slice(0, 500);
+        const err = new Error(
+          `fetchWithRetry: HTTP ${res.status} after ${retries + 1} attempts${body ? `: ${body}` : ""}`
+        );
+        err.statusCode = res.status;
+        throw err;
       }
       return res;
     } catch (err) {

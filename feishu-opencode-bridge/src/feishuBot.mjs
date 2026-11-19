@@ -6,6 +6,7 @@ import { mkdir } from "node:fs/promises";
 import { join, basename } from "node:path";
 import { pipeline } from "node:stream/promises";
 import { createFeishuBotCore, createOpenCodeServer, parseAllowedUsers } from "./feishuBotCore.mjs";
+import { createDshAcpServer } from "./dshAcpServer.mjs";
 import { setupGlobalErrorHandler } from "./globalErrorHandler.mjs";
 import { createLogger } from "./logger.mjs";
 import { createHealthServer } from "./healthServer.mjs";
@@ -21,6 +22,12 @@ import { summarizeVideo } from "./videoSummary.mjs";
  * 本模块顶层无副作用，import 安全。
  */
 
+export function resolveAgentBackend(raw) {
+  const backend = String(raw ?? "").trim() || "opencode";
+  if (backend === "opencode" || backend === "dsh-acp") return backend;
+  throw new Error(`AGENT_BACKEND 仅支持 opencode 或 dsh-acp，收到: ${backend}`);
+}
+
 /**
  * 构造 im.message.receive_v1 处理器。独立导出以便单测 catch 的错误回复。
  * @param {{ core: object, reply: (chatId: string, text: string) => Promise<void> }} deps
@@ -33,7 +40,7 @@ export function createMessageHandler({ core, reply }) {
       // 兜底：单条事件失败不影响后续事件与长连接；给用户回复错误,避免"发了消息没反应"
       const chatId = data?.message?.chat_id;
       if (chatId) {
-        await reply(chatId, `❌ 处理失败：${err?.message ?? err}\n可发 /kill 重置会话后重试。`).catch(() => {});
+        await Promise.resolve(reply(chatId, `❌ 处理失败：${err?.message ?? err}\n可发 /kill 重置会话后重试。`)).catch(() => {});
       }
     }
   };
@@ -48,11 +55,20 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   const APP_ID = process.env.FEISHU_APP_ID;
   const APP_SECRET = process.env.FEISHU_APP_SECRET;
   const OPENCODE_DIR = process.env.OPENCODE_DIR || process.cwd();
+  const AGENT_BACKEND = resolveAgentBackend(process.env.AGENT_BACKEND);
   const OPENCODE_CMD = process.env.OPENCODE_CMD || "opencode";
+  const DSH_CMD = process.env.DSH_CMD || "dsh";
+  const DSH_ARGS = String(process.env.DSH_ARGS ?? "").trim().split(/\s+/).filter(Boolean);
+  const DSH_PROFILE = process.env.DSH_PROFILE || "acp";
+  const DSH_HOME = process.env.DSH_HOME || undefined;
+  const DSH_CWD = process.env.DSH_CWD || OPENCODE_DIR;
   // 数据目录重定向（XDG_DATA_HOME），仅沙箱/隔离环境需要
   const OPENCODE_DATA_DIR = process.env.OPENCODE_DATA_DIR || undefined;
   const OPENCODE_SERVE_PORT = Number(process.env.OPENCODE_SERVE_PORT || 41234);
-  const SESSION_FILE = process.env.FEISHU_SESSION_FILE || new URL("../data/feishu-sessions.json", import.meta.url).pathname;
+  const SESSION_FILE = process.env.FEISHU_SESSION_FILE || new URL(
+    AGENT_BACKEND === "dsh-acp" ? "../data/dsh-feishu-sessions.json" : "../data/feishu-sessions.json",
+    import.meta.url
+  ).pathname;
   const SESSION_LOG_DIR = process.env.FEISHU_SESSION_LOG_DIR || new URL("../data/session-logs/", import.meta.url).pathname;
 
   if (!APP_ID || !APP_SECRET) {
@@ -147,12 +163,24 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     return absPath;
   }
 
-  const server = createOpenCodeServer({
-    cmd: OPENCODE_CMD,
-    port: OPENCODE_SERVE_PORT,
-    dataDir: OPENCODE_DATA_DIR,
-    cwd: OPENCODE_DIR,
-  });
+  const server = AGENT_BACKEND === "dsh-acp"
+    ? createDshAcpServer({
+      cmd: DSH_CMD,
+      args: DSH_ARGS,
+      profile: DSH_PROFILE,
+      cwd: OPENCODE_DIR,
+      processCwd: DSH_CWD,
+      home: DSH_HOME,
+      log: (msg) => logger.info("feishuBotCore", msg),
+    })
+    : createOpenCodeServer({
+      cmd: OPENCODE_CMD,
+      port: OPENCODE_SERVE_PORT,
+      dataDir: OPENCODE_DATA_DIR,
+      cwd: OPENCODE_DIR,
+      log: (msg) => logger.info("feishuBotCore", msg),
+      warn: (msg) => logger.warn("feishuBotCore", msg),
+    });
 
   const allowedUsers = parseAllowedUsers(process.env.OPENCODE_ALLOWED_USERS);
   const core = createFeishuBotCore({
@@ -222,7 +250,12 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   async function main() {
     await server.ensure();
     server.startEventLoop();
-    logger.info("feishuBot", `opencode serve 就绪: http://127.0.0.1:${OPENCODE_SERVE_PORT}`);
+    logger.info(
+      "feishuBot",
+      AGENT_BACKEND === "dsh-acp"
+        ? `DSH ACP 就绪: ${DSH_CMD} --profile ${DSH_PROFILE}`
+        : `opencode serve 就绪: http://127.0.0.1:${OPENCODE_SERVE_PORT}`
+    );
 
     // 端口被占用(EADDRINUSE)不能静默:否则进度/健康端点不可用而 /health 仍 200,监控误判
     const onListenError = (name, port) => (err) => {
@@ -251,7 +284,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     });
     await wsClient.start({ eventDispatcher });
     logger.info("feishuBot", "飞书长连接已启动，等待飞书消息…（Ctrl+C 退出）");
-    logger.info("feishuBot", `opencode 工作目录: ${OPENCODE_DIR}`);
+    logger.info("feishuBot", `${AGENT_BACKEND === "dsh-acp" ? "DSH" : "opencode"} 工作目录: ${OPENCODE_DIR}`);
     logger.info(
       "feishuBot",
       `授权用户: ${allowedUsers.length ? allowedUsers.join(", ") : "(未配置，将拒绝所有用户)"}`

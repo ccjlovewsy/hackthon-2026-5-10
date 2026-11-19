@@ -18,6 +18,11 @@ test("extractMessageText: 单聊文本", () => {
   assert.equal(extractMessageText(msg), "你好");
 });
 
+test("extractMessageText: 单聊命令剥离首尾空白", () => {
+  const msg = { content: JSON.stringify({ text: "\n/kill  " }), chat_type: "p2p" };
+  assert.equal(extractMessageText(msg), "/kill");
+});
+
 test("extractMessageText: 群聊剥离 @ 占位符", () => {
   const msg = {
     content: JSON.stringify({ text: "@_user_1 测试 @_all 内容" }),
@@ -379,6 +384,169 @@ test("sendMessage: 长工具调用中(parts 含 tool)idle 不触发,不把中间
   }
 });
 
+test("sendMessage: 空 parts + time.completed(鉴权失败形态) → 立即失败,不空等到 timeout", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url, opts) => {
+    if (url.endsWith("/message") && opts?.method === "POST") {
+      return new Response(JSON.stringify({ info: { id: "asst_empty" } }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    if (url.endsWith("/message")) {
+      // 实测 provider 鉴权失败时 serve 的返回形态:HTTP 200 + parts 为空 + completed 已置位
+      return new Response(
+        JSON.stringify([
+          {
+            info: {
+              id: "asst_empty",
+              finish: null,
+              time: { completed: Date.now() },
+              tokens: { input: 0, output: 0, reasoning: 0 },
+            },
+            parts: [],
+          },
+        ]),
+        { status: 200, headers: { "content-type": "application/json" } }
+      );
+    }
+    return new Response("ok", { status: 200 });
+  };
+  try {
+    const server = createOpenCodeServer({ cmd: "fake", port: 99994 });
+    const start = Date.now();
+    await assert.rejects(
+      server.sendMessage("ses_x", "hi", { timeoutMs: 30000, pollMs: 10 }),
+      (err) => {
+        assert.match(err.message, /助手消息为空/);
+        assert.match(err.message, /鉴权失败\/模型不可用/);
+        // 不能被外层 isSessionNotFound 误判成会话失效
+        assert.notEqual(err.statusCode, 404);
+        return true;
+      }
+    );
+    const elapsed = Date.now() - start;
+    assert.ok(elapsed < 2000, `应在首个轮询周期内失败，实际 ${elapsed}ms`);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("sendMessage: info.error → 立即抛错并带上 error 关键内容", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url, opts) => {
+    if (url.endsWith("/message") && opts?.method === "POST") {
+      return new Response(JSON.stringify({ info: { id: "asst_err" } }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    if (url.endsWith("/message")) {
+      return new Response(
+        JSON.stringify([
+          {
+            info: {
+              id: "asst_err",
+              error: { name: "AI_APICallError", data: { message: "Unauthorized" } },
+            },
+            parts: [{ type: "text", text: "半截输出" }],
+          },
+        ]),
+        { status: 200, headers: { "content-type": "application/json" } }
+      );
+    }
+    return new Response("ok", { status: 200 });
+  };
+  try {
+    const server = createOpenCodeServer({ cmd: "fake", port: 99993 });
+    const start = Date.now();
+    await assert.rejects(
+      server.sendMessage("ses_x", "hi", { timeoutMs: 30000, pollMs: 10 }),
+      (err) => {
+        assert.match(err.message, /助手消息报错/);
+        assert.match(err.message, /Unauthorized/);
+        assert.notEqual(err.statusCode, 404);
+        return true;
+      }
+    );
+    const elapsed = Date.now() - start;
+    assert.ok(elapsed < 2000, `应在首个轮询周期内失败，实际 ${elapsed}ms`);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("sendMessage: info.finish === 'error' → 立即抛错", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url, opts) => {
+    if (url.endsWith("/message") && opts?.method === "POST") {
+      return new Response(JSON.stringify({ info: { id: "asst_finish_err" } }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    if (url.endsWith("/message")) {
+      return new Response(
+        JSON.stringify([
+          { info: { id: "asst_finish_err", finish: "error", time: { completed: Date.now() } }, parts: [] },
+        ]),
+        { status: 200, headers: { "content-type": "application/json" } }
+      );
+    }
+    return new Response("ok", { status: 200 });
+  };
+  try {
+    const server = createOpenCodeServer({ cmd: "fake", port: 99992 });
+    const start = Date.now();
+    await assert.rejects(
+      server.sendMessage("ses_x", "hi", { timeoutMs: 30000, pollMs: 10 }),
+      (err) => {
+        assert.match(err.message, /助手消息报错: finish=error/);
+        assert.notEqual(err.statusCode, 404);
+        return true;
+      }
+    );
+    const elapsed = Date.now() - start;
+    assert.ok(elapsed < 2000, `应在首个轮询周期内失败，实际 ${elapsed}ms`);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("sendMessage: 正常 step-finish 消息(带 time.completed)不被终止态逻辑误杀", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url, opts) => {
+    if (url.endsWith("/message") && opts?.method === "POST") {
+      return new Response(JSON.stringify({ info: { id: "asst_ok" } }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    if (url.endsWith("/message")) {
+      return new Response(
+        JSON.stringify([
+          {
+            info: { id: "asst_ok", finish: "stop", time: { completed: Date.now() } },
+            parts: [
+              { type: "text", text: "正常回复" },
+              { type: "step-finish" },
+            ],
+          },
+        ]),
+        { status: 200, headers: { "content-type": "application/json" } }
+      );
+    }
+    return new Response("ok", { status: 200 });
+  };
+  try {
+    const server = createOpenCodeServer({ cmd: "fake", port: 99991 });
+    const text = await server.sendMessage("ses_x", "hi", { pollMs: 10, timeoutMs: 1000 });
+    assert.equal(text, "正常回复");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("handleMessage: /kill 后旧任务 404 自愈不再写回 sessionMap(代次校验)", async () => {
   const fs = await import("node:fs");
   const sessionFile = "/tmp/test-sessions-killrace.json";
@@ -446,13 +614,14 @@ test("handleMessage: sendMessage 非 404 错误时抛出,让 feishuBot.mjs catch
     replyPermission: async () => {},
   };
   const replies = [];
+  const logs = [];
   const core = createFeishuBotCore({
     server: fakeServer,
     allowedUsers: ["ou_me"],
     sessionFile,
     reply: (chatId, text) => replies.push(text),
     sendPermissionAsk: () => {},
-    log: () => {},
+    log: (msg) => logs.push(msg),
   });
 
   // handleMessage 应抛出(由 feishuBot.mjs 的 catch 回复 ❌ 处理失败)
@@ -465,6 +634,7 @@ test("handleMessage: sendMessage 非 404 错误时抛出,让 feishuBot.mjs catch
   );
   // core 自身不回复错误(由 feishuBot.mjs 的 catch 处理),这里只确保抛出
   assert.equal(replies.length, 0, "core 不应在 throw 前回复(由 feishuBot.mjs catch 回复)");
+  assert.ok(logs.some((msg) => msg.includes("指令失败 (session ses_err)") && msg.includes("aborted")));
   fs.rmSync(sessionFile, { force: true });
 });
 
@@ -947,4 +1117,180 @@ test("handleMessage: summarizeVideo 抛 ENOENT(yt-dlp 未装)→ 提示安装", 
   assert.match(ret, /请先安装 yt-dlp/);
   assert.ok(replies.some((t) => /请先安装 yt-dlp/.test(t)), "reply 也应含安装提示");
   fs.rmSync(sessionFile, { force: true });
+});
+
+// ===== model pinning / masked 500 可定位报错 =====
+
+function jsonRes(obj, status = 200) {
+  return new Response(JSON.stringify(obj), {
+    status,
+    headers: { "content-type": "application/json" },
+  });
+}
+
+test("sendMessage: OPENCODE_MODEL 固定模型(按首个 / 切分,modelID 可含 /)", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalModel = process.env.OPENCODE_MODEL;
+  process.env.OPENCODE_MODEL = "volcano/volcengine/deepseek-v4.1-flash";
+  const postBodies = [];
+  let configCalls = 0;
+  globalThis.fetch = async (url, opts) => {
+    if (url.endsWith("/config")) {
+      configCalls++;
+      return jsonRes({ model: "volcano/other" });
+    }
+    if (url.endsWith("/message") && opts?.method === "POST") {
+      postBodies.push(JSON.parse(opts.body));
+      return jsonRes({ info: { id: "asst_pin" } });
+    }
+    if (url.endsWith("/message")) {
+      return jsonRes([
+        { info: { id: "asst_pin" }, parts: [{ type: "text", text: "pinned ok" }, { type: "step-finish" }] },
+      ]);
+    }
+    return new Response("ok", { status: 200 });
+  };
+  try {
+    const server = createOpenCodeServer({ cmd: "fake", port: 99990, log: () => {}, warn: () => {} });
+    const text = await server.sendMessage("ses_pin", "hi", { pollMs: 10, timeoutMs: 1000 });
+    assert.equal(configCalls, 0, "设置 OPENCODE_MODEL 时不应请求 /config");
+    assert.equal(postBodies.length, 1);
+    assert.deepEqual(postBodies[0].model, {
+      providerID: "volcano",
+      modelID: "volcengine/deepseek-v4.1-flash",
+    });
+    assert.match(text, /pinned ok/);
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalModel === undefined) delete process.env.OPENCODE_MODEL;
+    else process.env.OPENCODE_MODEL = originalModel;
+  }
+});
+
+test("sendMessage: 未设 OPENCODE_MODEL → 惰性 GET /config 一次并缓存", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalModel = process.env.OPENCODE_MODEL;
+  delete process.env.OPENCODE_MODEL;
+  let configCalls = 0;
+  let msgSeq = 0;
+  const postBodies = [];
+  globalThis.fetch = async (url, opts) => {
+    if (url.endsWith("/config")) {
+      configCalls++;
+      return jsonRes({ model: "volcano/kimi-k3.1-pro" });
+    }
+    if (url.endsWith("/message") && opts?.method === "POST") {
+      postBodies.push(JSON.parse(opts.body));
+      return jsonRes({ info: { id: `asst_cfg_${++msgSeq}` } });
+    }
+    if (url.endsWith("/message")) {
+      return jsonRes([
+        {
+          info: { id: `asst_cfg_${msgSeq}` },
+          parts: [{ type: "text", text: `cfg ok ${msgSeq}` }, { type: "step-finish" }],
+        },
+      ]);
+    }
+    return new Response("ok", { status: 200 });
+  };
+  try {
+    const server = createOpenCodeServer({ cmd: "fake", port: 99989, log: () => {}, warn: () => {} });
+    await server.sendMessage("ses_cfg", "a", { pollMs: 10, timeoutMs: 1000 });
+    await server.sendMessage("ses_cfg", "b", { pollMs: 10, timeoutMs: 1000 });
+    assert.equal(configCalls, 1, "/config 成功解析后应缓存,第二条指令不得再请求");
+    assert.equal(postBodies.length, 2);
+    assert.deepEqual(postBodies[0].model, { providerID: "volcano", modelID: "kimi-k3.1-pro" });
+    assert.deepEqual(postBodies[1].model, { providerID: "volcano", modelID: "kimi-k3.1-pro" });
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalModel === undefined) delete process.env.OPENCODE_MODEL;
+    else process.env.OPENCODE_MODEL = originalModel;
+  }
+});
+
+test("sendMessage: masked 5xx(data.ref) → 错误含 ref、serve 日志路径与响应体", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalModel = process.env.OPENCODE_MODEL;
+  const originalDataDir = process.env.OPENCODE_DATA_DIR;
+  delete process.env.OPENCODE_MODEL;
+  process.env.OPENCODE_DATA_DIR = "/tmp/oc-xdg-pin-test";
+  const body = JSON.stringify({
+    name: "UnknownError",
+    data: { message: "masked", ref: "err_deadbeef" },
+  });
+  globalThis.fetch = async (url, opts) => {
+    if (url.endsWith("/config")) return jsonRes({ model: "volcano/glm-5.2" });
+    if (url.endsWith("/message") && opts?.method === "POST") return new Response(body, { status: 500 });
+    return new Response("ok", { status: 200 });
+  };
+  try {
+    const server = createOpenCodeServer({ cmd: "fake", port: 99988, log: () => {}, warn: () => {} });
+    await assert.rejects(
+      server.sendMessage("ses_500", "hi", { pollMs: 10, timeoutMs: 500 }),
+      (err) => {
+        assert.equal(err.statusCode, 500);
+        assert.match(err.message, /err_deadbeef/);
+        assert.match(err.message, /\/tmp\/oc-xdg-pin-test\/opencode\/log\/opencode\.log/);
+        assert.match(err.message, /UnknownError/);
+        return true;
+      }
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalModel === undefined) delete process.env.OPENCODE_MODEL;
+    else process.env.OPENCODE_MODEL = originalModel;
+    if (originalDataDir === undefined) delete process.env.OPENCODE_DATA_DIR;
+    else process.env.OPENCODE_DATA_DIR = originalDataDir;
+  }
+});
+
+test("sendMessage: /config 失败 → POST body 不含 model,指令流程照常且 warn 只记一次", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalModel = process.env.OPENCODE_MODEL;
+  delete process.env.OPENCODE_MODEL;
+  let configCalls = 0;
+  let msgSeq = 0;
+  const postBodies = [];
+  const warnings = [];
+  globalThis.fetch = async (url, opts) => {
+    if (url.endsWith("/config")) {
+      configCalls++;
+      return new Response("config boom", { status: 500 });
+    }
+    if (url.endsWith("/message") && opts?.method === "POST") {
+      postBodies.push(JSON.parse(opts.body));
+      return jsonRes({ info: { id: `asst_nomodel_${++msgSeq}` } });
+    }
+    if (url.endsWith("/message")) {
+      return jsonRes([
+        {
+          info: { id: `asst_nomodel_${msgSeq}` },
+          parts: [{ type: "text", text: "still works" }, { type: "step-finish" }],
+        },
+      ]);
+    }
+    return new Response("ok", { status: 200 });
+  };
+  try {
+    const server = createOpenCodeServer({
+      cmd: "fake",
+      port: 99987,
+      log: () => {},
+      warn: (m) => warnings.push(m),
+    });
+    const text1 = await server.sendMessage("ses_nomodel", "a", { pollMs: 10, timeoutMs: 1000 });
+    const text2 = await server.sendMessage("ses_nomodel", "b", { pollMs: 10, timeoutMs: 1000 });
+    assert.match(text1, /still works/);
+    assert.match(text2, /still works/);
+    assert.equal(configCalls, 2, "失败不缓存,后续指令会重试 /config(成功后才缓存)");
+    assert.equal(postBodies.length, 2);
+    assert.equal(Object.hasOwn(postBodies[0], "model"), false, "解析失败时 body 不得带 model");
+    assert.equal(Object.hasOwn(postBodies[1], "model"), false);
+    assert.equal(warnings.length, 1, "warn 只记一次");
+    assert.match(warnings[0], /\/config/);
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalModel === undefined) delete process.env.OPENCODE_MODEL;
+    else process.env.OPENCODE_MODEL = originalModel;
+  }
 });
